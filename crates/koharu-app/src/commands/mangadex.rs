@@ -608,27 +608,12 @@ async fn resolve_manga_at(url: &str, api: &str) -> Result<MangaDexMetadata> {
         .attributes
         .available_translated_languages
         .unwrap_or_default();
-    if available_languages.is_empty() {
-        return Ok(MangaDexMetadata {
-            manga_id: manga.data.id,
-            title,
-            languages: Vec::new(),
-        });
-    }
-    let language_names: Vec<LanguageResponse> = request(endpoint(api, "static/languages")?).await?;
-    let language_names = language_names
-        .into_iter()
-        .map(|language| (language.locale, language.name))
-        .collect::<HashMap<_, _>>();
     let mut seen = HashSet::new();
     let languages = available_languages
         .into_iter()
         .filter(|code| seen.insert(code.clone()))
         .map(|code| MangaDexLanguage {
-            name: language_names
-                .get(&code)
-                .cloned()
-                .unwrap_or_else(|| code.clone()),
+            name: language_name(&code).to_owned(),
             code,
         })
         .collect();
@@ -637,6 +622,55 @@ async fn resolve_manga_at(url: &str, api: &str) -> Result<MangaDexMetadata> {
         title,
         languages,
     })
+}
+
+fn language_name(code: &str) -> &str {
+    match code {
+        "ar" => "Arabic",
+        "az" => "Azerbaijani",
+        "bg" => "Bulgarian",
+        "bn" => "Bengali",
+        "ca" => "Catalan",
+        "cs" => "Czech",
+        "da" => "Danish",
+        "de" => "German",
+        "el" => "Greek",
+        "en" => "English",
+        "es" => "Spanish",
+        "es-la" => "Spanish (Latin America)",
+        "fa" => "Persian",
+        "fi" => "Finnish",
+        "fil" => "Filipino",
+        "fr" => "French",
+        "he" => "Hebrew",
+        "hi" => "Hindi",
+        "hu" => "Hungarian",
+        "id" => "Indonesian",
+        "it" => "Italian",
+        "ja" => "Japanese",
+        "ja-ro" => "Japanese (Romanized)",
+        "ko" => "Korean",
+        "ko-ro" => "Korean (Romanized)",
+        "ms" => "Malay",
+        "my" => "Burmese",
+        "nl" => "Dutch",
+        "no" => "Norwegian",
+        "pl" => "Polish",
+        "pt" => "Portuguese",
+        "pt-br" => "Portuguese (Brazil)",
+        "ro" => "Romanian",
+        "ru" => "Russian",
+        "sr" => "Serbian",
+        "sv" => "Swedish",
+        "th" => "Thai",
+        "tr" => "Turkish",
+        "uk" => "Ukrainian",
+        "vi" => "Vietnamese",
+        "zh" => "Chinese",
+        "zh-hk" => "Chinese (Traditional)",
+        "zh-ro" => "Chinese (Romanized)",
+        _ => code,
+    }
 }
 
 async fn chapter_manifest_at(
@@ -726,12 +760,6 @@ struct MangaAttributes {
     title: BTreeMap<String, String>,
     #[serde(default, rename = "availableTranslatedLanguages")]
     available_translated_languages: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-struct LanguageResponse {
-    locale: String,
-    name: String,
 }
 
 #[derive(Deserialize)]
@@ -1014,13 +1042,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolves_english_title_and_unique_named_languages() {
+    async fn resolves_localized_languages_without_a_registry_request() {
         let server = FixtureServer::start(|target| match target {
             path if path.starts_with(&format!("/manga/{MANGA_ID}")) => manga(
                 r#"{"ja":"日本語の題名","en":"English title"}"#,
-                r#"["en","ja","en"]"#,
+                r#"["en","ja","en","x-klingon"]"#,
             ),
-            "/static/languages" => languages(),
             _ => failure(),
         })
         .await;
@@ -1040,8 +1067,13 @@ mod tests {
                 .into_iter()
                 .map(|language| (language.code, language.name))
                 .collect::<Vec<_>>(),
-            [("en".into(), "English".into()), ("ja".into(), "Japanese".into())]
+            [
+                ("en".into(), "English".into()),
+                ("ja".into(), "Japanese".into()),
+                ("x-klingon".into(), "x-klingon".into()),
+            ]
         );
+        assert_eq!(server.requests().await, vec![format!("/manga/{MANGA_ID}")]);
     }
 
     #[tokio::test]
@@ -1050,7 +1082,6 @@ mod tests {
             path if path.starts_with(&format!("/manga/{MANGA_ID}")) => {
                 manga(r#"{"en":"Untitled"}"#, "[]")
             }
-            "/static/languages" => languages(),
             _ => failure(),
         })
         .await;
@@ -1120,10 +1151,6 @@ mod tests {
         format!(
             r#"{{"data":{{"id":"{MANGA_ID}","attributes":{{"title":{title},"availableTranslatedLanguages":{languages}}}}}}}"#
         )
-    }
-
-    fn languages() -> String {
-        r#"[{"locale":"en","name":"English"},{"locale":"ja","name":"Japanese"}]"#.into()
     }
 
     fn chapters(total: usize, offset: usize, data: &str) -> String {
