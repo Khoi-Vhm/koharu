@@ -147,7 +147,9 @@ async fn chapter_manifest_at(
         if offset >= page.total {
             return Ok(manifest);
         }
-        bail!("MangaDex returned an empty chapter page before the collection ended");
+        if page_len == 0 {
+            bail!("MangaDex returned an empty chapter page before the collection ended");
+        }
     }
 }
 
