@@ -1,19 +1,21 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { TitleBar } from '@/components/app/TitleBar'
 import { Editor } from '@/components/editor/Editor'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
+import { MangaDexProjectDialog } from '@/components/start/MangaDexProjectDialog'
 import { StartView } from '@/components/start/StartView'
-import { useProject } from '@/lib/queries'
+import { pageKey, pagesKey, projectKey, refresh, useProject } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
 import { cn } from '@koharu/ui/lib/utils'
 
 export function KoharuApp() {
   const { t } = useTranslation()
   const project = useProject().data
+  const [mangadexOpen, setMangaDexOpen] = useState(false)
   const selectedPages = useKoharuStore((state) => state.selectedPages)
   const selectPages = useKoharuStore((state) => state.selectPages)
   const selectLayers = useKoharuStore((state) => state.selectLayers)
@@ -46,10 +48,18 @@ export function KoharuApp() {
           </div>
         </main>
       ) : project === null ? (
-        <StartView />
+        <StartView onImportMangaDex={() => setMangaDexOpen(true)} />
       ) : (
         <Editor />
       )}
+      <MangaDexProjectDialog
+        open={mangadexOpen}
+        onOpenChange={setMangaDexOpen}
+        onSuccess={async () => {
+          setMangaDexOpen(false)
+          await refresh(projectKey, pagesKey, pageKey)
+        }}
+      />
     </div>
   )
 }

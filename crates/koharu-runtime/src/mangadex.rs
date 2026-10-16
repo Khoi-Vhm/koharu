@@ -145,22 +145,45 @@ impl Platform {
             _ => "python/bin/python3",
         }
     }
-    fn required_files(self) -> [&'static str; 4] {
+    const fn site_packages_path(self) -> &'static str {
+        match self {
+            Self::WindowsX64 => "python/Lib/site-packages",
+            _ => "python/lib/python3.12/site-packages",
+        }
+    }
+    fn required_files(self) -> [PathBuf; 4] {
+        let packages = Path::new(self.site_packages_path());
         [
-            self.python_path(),
-            "python/LICENSE",
-            "python/lib/python3.12/site-packages/mangadex_downloader/__main__.py",
-            "python/lib/python3.12/site-packages/mangadex_downloader-3.1.4.dist-info/licenses/LICENSE",
+            self.python_path().into(),
+            match self {
+                Self::WindowsX64 => "python/LICENSE.txt".into(),
+                _ => "python/lib/python3.12/LICENSE.txt".into(),
+            },
+            packages.join("mangadex_downloader/__main__.py"),
+            packages.join("mangadex_downloader-3.1.4.dist-info/licenses/LICENSE"),
         ]
     }
     fn complete(self, root: &Path) -> bool {
-        self.required_files()
-            .iter()
-            .all(|path| root.join(path).is_file())
-            && Command::new(root.join(self.python_path()))
-                .args(["-c", VALIDATE_INSTALL])
-                .output()
-                .is_ok_and(|output| output.status.success())
+        self.validate_install(root).is_ok()
+    }
+    fn validate_install(self, root: &Path) -> Result<()> {
+        for path in self.required_files() {
+            ensure!(
+                root.join(&path).is_file(),
+                "MangaDex runtime is missing {}",
+                path.display()
+            );
+        }
+        let output = Command::new(root.join(self.python_path()))
+            .args(["-c", VALIDATE_INSTALL])
+            .output()
+            .context("failed to validate managed MangaDex Python")?;
+        ensure!(
+            output.status.success(),
+            "managed MangaDex Python validation failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        Ok(())
     }
     async fn install(self, stage: &Path) -> Result<()> {
         let artifact = self.artifact();
@@ -202,7 +225,7 @@ impl Platform {
             ])
             .arg(&wheel_dir)
             .args(["--require-hashes", "--target"])
-            .arg(stage.join("python/lib/python3.12/site-packages"))
+            .arg(stage.join(self.site_packages_path()))
             .arg("-r")
             .arg(&requirements)
             .status()
@@ -214,7 +237,7 @@ impl Platform {
         );
         std::fs::remove_dir_all(wheel_dir)?;
         std::fs::remove_file(requirements)?;
-        Ok(())
+        self.validate_install(stage)
     }
 
     fn wheels(self) -> Vec<Wheel<'static>> {

@@ -7,7 +7,6 @@ import { useTranslation } from 'react-i18next'
 import { call } from '@/lib/backend'
 import { pageKey, pagesKey, projectKey, refresh } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
-import { MangaDexProjectDialog } from './MangaDexProjectDialog'
 import { commands, type ProjectSummary } from '@koharu/bridge/protocol'
 import {
   AlertDialog,
@@ -25,14 +24,13 @@ import { Input } from '@koharu/ui/components/input'
 import { ScrollArea } from '@koharu/ui/components/scroll-area'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@koharu/ui/components/tooltip'
 
-export function StartView() {
+export function StartView({ onImportMangaDex }: { onImportMangaDex: () => void }) {
   const { t } = useTranslation()
   const setSettingsOpen = useKoharuStore((state) => state.setSettingsOpen)
   const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [name, setName] = useState('')
   const [busy, setBusy] = useState<string | null>('list')
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null)
-  const [mangadexOpen, setMangaDexOpen] = useState(false)
 
   const reload = useCallback(async () => {
     setBusy('list')
@@ -169,7 +167,7 @@ export function StartView() {
                   variant='outline'
                   className='mt-3 h-9 justify-center gap-1.5 text-[11px]'
                   disabled={busy !== null}
-                  onClick={() => setMangaDexOpen(true)}
+                  onClick={onImportMangaDex}
                 >
                   <Download className='size-3.5' />
                   {t('mangadex.open')}
@@ -286,14 +284,6 @@ export function StartView() {
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
-      <MangaDexProjectDialog
-        open={mangadexOpen}
-        onOpenChange={setMangaDexOpen}
-        onSuccess={async () => {
-          setMangaDexOpen(false)
-          await refresh(projectKey, pagesKey, pageKey)
-        }}
-      />
     </AlertDialog>
   )
 }

@@ -1,23 +1,25 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { StartView } from '@/components/start/StartView'
-import { queryClient, useProject } from '@/lib/queries'
+import { KoharuApp } from '@/components/app/KoharuApp'
+import { projectKey, queryClient, useProject } from '@/lib/queries'
 import { commands, type MangaDexImportEvent } from '@koharu/bridge/protocol'
 
 type MangaDexEvent = MangaDexImportEvent
 
-function ProjectFlow() {
-  const project = useProject().data
-  return project ? <p>Opened {project.name}</p> : <StartView />
-}
+vi.mock('@/components/app/TitleBar', () => ({ TitleBar: () => null }))
+vi.mock('@/components/preferences/SettingsPage', () => ({ SettingsPage: () => null }))
+vi.mock('@/components/editor/Editor', () => ({
+  Editor: () => <p>Opened {useProject().data?.name}</p>,
+}))
 
 function renderProjectFlow() {
+  queryClient.setQueryData(projectKey, null)
   return render(
     <QueryClientProvider client={queryClient}>
-      <ProjectFlow />
+      <KoharuApp />
     </QueryClientProvider>,
   )
 }
@@ -58,7 +60,7 @@ describe('StartView', () => {
         { code: 'ja', name: 'Japanese' },
       ],
     })
-    render(<StartView />)
+    renderProjectFlow()
     const dialog = await openMangaDexDialog()
     fireEvent.change(screen.getByRole('textbox', { name: 'MangaDex URL' }), {
       target: { value: url },
@@ -133,7 +135,7 @@ describe('StartView', () => {
       .mockResolvedValueOnce([{ name: 'Blue Archive' }])
       .mockResolvedValueOnce([])
     const remove = vi.spyOn(commands, 'deleteProject').mockResolvedValue(null)
-    render(<StartView />)
+    renderProjectFlow()
 
     const deleteButton = await screen.findByRole('button', { name: 'Delete Blue Archive' })
     await waitFor(() => expect(deleteButton).toBeEnabled())
@@ -201,13 +203,15 @@ describe('StartView', () => {
     const start = within(dialog).getByRole('button', { name: 'Import chapters' })
     await waitFor(() => expect(start).toBeEnabled())
 
-    let resolveReplacement:
-      | ((value: Awaited<ReturnType<typeof commands.resolveMangadex>>) => void)
-      | null = null
+    const replacement = {
+      resolve: null as
+        | ((value: Awaited<ReturnType<typeof commands.resolveMangadex>>) => void)
+        | null,
+    }
     mocks.resolveMangadex.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveReplacement = resolve
+          replacement.resolve = resolve
         }),
     )
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'MangaDex URL' }), {
@@ -219,7 +223,7 @@ describe('StartView', () => {
     fireEvent.click(start)
     expect(mocks.startMangadexImport).not.toHaveBeenCalled()
 
-    resolveReplacement?.({
+    replacement.resolve?.({
       manga_id: '87654321-1234-1234-1234-123456789abc',
       title: 'New title',
       languages: [],
@@ -232,10 +236,10 @@ describe('StartView', () => {
     mocks.pickMangadexOutputFolder.mockResolvedValue('/Users/example/Downloads')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Choose destination' }))
     await screen.findByDisplayValue('/Users/example/Downloads')
-    let emit: ((event: MangaDexEvent) => void) | null = null
+    const emitted = { callback: null as ((event: MangaDexEvent) => void) | null }
     mocks.startMangadexImport.mockImplementation(
       async (_name, _url, _language, _output, channel) => {
-        emit = channel.onmessage
+        emitted.callback = channel.onmessage
         return 'import-1'
       },
     )
@@ -251,19 +255,52 @@ describe('StartView', () => {
         expect.anything(),
       ),
     )
-    emit?.({ job_id: 'import-1', state: 'downloading', error: null })
+    emitted.callback?.({ job_id: 'import-1', state: 'downloading', error: null })
     expect(await within(dialog).findByText('Downloading chapters…')).toBeInTheDocument()
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel import' }))
     await waitFor(() => expect(mocks.cancelMangadexImport).toHaveBeenCalledWith('import-1'))
-    emit?.({ job_id: 'import-1', state: 'cancelled', error: null })
+    emitted.callback?.({ job_id: 'import-1', state: 'cancelled', error: null })
     expect(await within(dialog).findByText('Import cancelled.')).toBeInTheDocument()
+  })
+
+  it('keeps import progress and failures visible after the project opens', async () => {
+    const { dialog, mocks } = await resolveManga()
+    mocks.pickMangadexOutputFolder.mockResolvedValue('/Users/example/Downloads')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Choose destination' }))
+    await screen.findByDisplayValue('/Users/example/Downloads')
+    const emitted = { callback: null as ((event: MangaDexEvent) => void) | null }
+    mocks.startMangadexImport.mockImplementation(
+      async (_name, _url, _language, _output, channel) => {
+        emitted.callback = channel.onmessage
+        queryClient.setQueryData(projectKey, {
+          name: 'Blue Period',
+          revision: 0,
+          active_page: null,
+          can_undo: false,
+          can_redo: false,
+        })
+        return 'import-1'
+      },
+    )
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Import chapters' }))
+    await waitFor(() => expect(mocks.startMangadexImport).toHaveBeenCalled())
+    await act(async () => {
+      emitted.callback?.({
+        job_id: 'import-1',
+        state: 'failed',
+        error: 'Runtime validation failed',
+      })
+    })
+    expect(screen.getByRole('dialog', { name: 'Import from MangaDex' })).toBeInTheDocument()
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('Runtime validation failed')
+    expect(screen.queryByRole('heading', { name: 'Projects' })).not.toBeInTheDocument()
   })
 
   it('shows actionable MangaDex errors', async () => {
     const mocks = setupMangaDex()
     mocks.resolveMangadex.mockRejectedValue(new Error('MangaDex URL must use HTTPS'))
-    render(<StartView />)
+    renderProjectFlow()
     await openMangaDexDialog()
     fireEvent.change(screen.getByRole('textbox', { name: 'MangaDex URL' }), {
       target: { value: 'http://mangadex.org/title/example' },

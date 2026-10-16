@@ -3,12 +3,13 @@ use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use koharu_runtime::{http_client, mangadex::MangaDexDownloader};
+use koharu_runtime::mangadex::MangaDexDownloader;
 use parking_lot::Mutex;
+use reqwest::{Client, tls::Version};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use specta::Type;
 use tauri::{AppHandle, Manager as _, WebviewWindow, ipc::Channel};
@@ -26,6 +27,7 @@ use super::{
 
 const API: &str = "https://api.mangadex.org";
 const CHAPTER_PAGE_SIZE: usize = 100;
+static API_CLIENT: OnceLock<Client> = OnceLock::new();
 
 #[derive(Clone, Debug, Serialize, Type)]
 pub struct MangaDexImportEvent {
@@ -767,7 +769,7 @@ fn endpoint(api: &str, path: &str) -> Result<Url> {
 }
 
 async fn request<T: DeserializeOwned>(url: Url) -> Result<T> {
-    http_client()?
+    api_client()?
         .get(url)
         .send()
         .await
@@ -777,6 +779,22 @@ async fn request<T: DeserializeOwned>(url: Url) -> Result<T> {
         .json()
         .await
         .context("MangaDex API response was invalid")
+}
+
+fn api_client() -> Result<Client> {
+    if let Some(client) = API_CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let builder = Client::builder()
+        .user_agent(concat!("koharu/", env!("CARGO_PKG_VERSION")))
+        .http1_only()
+        .tls_backend_rustls()
+        .tls_version_min(Version::TLS_1_3)
+        .tls_version_max(Version::TLS_1_3);
+    let client = builder
+        .build()
+        .context("failed to build MangaDex API client")?;
+    Ok(API_CLIENT.get_or_init(|| client).clone())
 }
 
 #[derive(Deserialize)]

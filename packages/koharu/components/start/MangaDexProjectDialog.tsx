@@ -6,7 +6,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
-import { commands, type MangaDexImportEvent } from '@koharu/bridge/protocol'
+import { commands, type MangaDexImportEvent, type MangaDexLanguage } from '@koharu/bridge/protocol'
 import { Alert, AlertDescription, AlertTitle } from '@koharu/ui/components/alert'
 import { Button } from '@koharu/ui/components/button'
 import {
@@ -107,6 +107,7 @@ export function MangaDexProjectDialog({
     if (!canStart || !language || !output) return
     setError(null)
     setDestinationCancelled(false)
+    setJobId(null)
     setStatus('runtime_setup')
     const channel = new Channel<MangaDexImportEvent>()
     channel.onmessage = (event) => {
@@ -205,7 +206,7 @@ export function MangaDexProjectDialog({
           <label className='grid gap-1.5 text-[11px] font-medium' htmlFor='mangadex-language'>
             {t('mangadex.language')}
             <Select
-              value={language ?? undefined}
+              value={language}
               itemToStringLabel={(code) =>
                 languages.find((item) => item.code === code)?.name ?? code
               }
