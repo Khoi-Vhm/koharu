@@ -463,6 +463,34 @@
       "title": "Composición tipográfica"
     }
   },
+  "mangadex": {
+    "cancelImport": "Cancelar importación",
+    "chooseDestination": "Elegir destino",
+    "description": "Importa todos los capítulos disponibles de un título de MangaDex a un proyecto nuevo.",
+    "destination": "Carpeta de destino",
+    "destinationCancelled": "No se seleccionó ningún destino.",
+    "destinationPlaceholder": "Elige una carpeta para los capítulos descargados",
+    "errorTitle": "No se pudo continuar la importación de MangaDex",
+    "importFailed": "La importación de MangaDex falló.",
+    "language": "Idioma de los capítulos",
+    "languagePlaceholder": "Elige un idioma de capítulos",
+    "noLanguages": "Este título de MangaDex no tiene idiomas de capítulos disponibles.",
+    "open": "Importar desde MangaDex",
+    "resolve": "Buscar manga",
+    "startImport": "Importar capítulos",
+    "status": {
+      "cancelled": "Importación cancelada.",
+      "cancelling": "Cancelando importación…",
+      "downloading": "Descargando capítulos…",
+      "failed": "La importación falló.",
+      "finished": "Importación completa.",
+      "importing": "Importando páginas…",
+      "runtime_setup": "Preparando el descargador…"
+    },
+    "title": "Importar desde MangaDex",
+    "url": "URL de MangaDex",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "Crear",
     "deleteAction": "Eliminar proyecto",

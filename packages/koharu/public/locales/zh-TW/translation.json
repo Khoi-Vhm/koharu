@@ -463,6 +463,34 @@
       "title": "排版"
     }
   },
+  "mangadex": {
+    "cancelImport": "取消匯入",
+    "chooseDestination": "選擇目的地",
+    "description": "將 MangaDex 作品中所有可用章節匯入新的專案。",
+    "destination": "目的地資料夾",
+    "destinationCancelled": "未選擇目的地。",
+    "destinationPlaceholder": "選擇用來儲存下載章節的資料夾",
+    "errorTitle": "無法繼續 MangaDex 匯入",
+    "importFailed": "MangaDex 匯入失敗。",
+    "language": "章節語言",
+    "languagePlaceholder": "選擇章節語言",
+    "noLanguages": "此 MangaDex 作品沒有可用的章節語言。",
+    "open": "從 MangaDex 匯入",
+    "resolve": "尋找漫畫",
+    "startImport": "匯入章節",
+    "status": {
+      "cancelled": "已取消匯入。",
+      "cancelling": "正在取消匯入…",
+      "downloading": "正在下載章節…",
+      "failed": "匯入失敗。",
+      "finished": "匯入完成。",
+      "importing": "正在匯入頁面…",
+      "runtime_setup": "正在準備下載器…"
+    },
+    "title": "從 MangaDex 匯入",
+    "url": "MangaDex URL",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "建立",
     "deleteAction": "刪除專案",

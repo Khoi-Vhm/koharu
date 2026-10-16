@@ -463,6 +463,34 @@
       "title": "Dizgi"
     }
   },
+  "mangadex": {
+    "cancelImport": "İçe aktarmayı iptal et",
+    "chooseDestination": "Hedefi seç",
+    "description": "Bir MangaDex başlığındaki kullanılabilir tüm bölümleri yeni bir projeye aktarın.",
+    "destination": "Hedef klasör",
+    "destinationCancelled": "Hedef seçilmedi.",
+    "destinationPlaceholder": "İndirilen bölümler için bir klasör seçin",
+    "errorTitle": "MangaDex içe aktarması sürdürülemedi",
+    "importFailed": "MangaDex içe aktarması başarısız oldu.",
+    "language": "Bölüm dili",
+    "languagePlaceholder": "Bir bölüm dili seçin",
+    "noLanguages": "Bu MangaDex başlığında kullanılabilir bölüm dili yok.",
+    "open": "MangaDex'ten içe aktar",
+    "resolve": "Manga bul",
+    "startImport": "Bölümleri içe aktar",
+    "status": {
+      "cancelled": "İçe aktarma iptal edildi.",
+      "cancelling": "İçe aktarma iptal ediliyor…",
+      "downloading": "Bölümler indiriliyor…",
+      "failed": "İçe aktarma başarısız oldu.",
+      "finished": "İçe aktarma tamamlandı.",
+      "importing": "Sayfalar içe aktarılıyor…",
+      "runtime_setup": "İndirici hazırlanıyor…"
+    },
+    "title": "MangaDex'ten içe aktar",
+    "url": "MangaDex URL'si",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "Oluştur",
     "deleteAction": "Projeyi sil",

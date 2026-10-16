@@ -463,6 +463,34 @@
       "title": "조판"
     }
   },
+  "mangadex": {
+    "cancelImport": "가져오기 취소",
+    "chooseDestination": "대상 선택",
+    "description": "MangaDex 제목에서 사용 가능한 모든 챕터를 새 프로젝트로 가져옵니다.",
+    "destination": "대상 폴더",
+    "destinationCancelled": "대상을 선택하지 않았습니다.",
+    "destinationPlaceholder": "다운로드한 챕터를 저장할 폴더 선택",
+    "errorTitle": "MangaDex 가져오기를 계속할 수 없습니다",
+    "importFailed": "MangaDex 가져오기에 실패했습니다.",
+    "language": "챕터 언어",
+    "languagePlaceholder": "챕터 언어 선택",
+    "noLanguages": "이 MangaDex 제목에는 사용 가능한 챕터 언어가 없습니다.",
+    "open": "MangaDex에서 가져오기",
+    "resolve": "만화 찾기",
+    "startImport": "챕터 가져오기",
+    "status": {
+      "cancelled": "가져오기가 취소되었습니다.",
+      "cancelling": "가져오기 취소 중…",
+      "downloading": "챕터 다운로드 중…",
+      "failed": "가져오기에 실패했습니다.",
+      "finished": "가져오기가 완료되었습니다.",
+      "importing": "페이지 가져오는 중…",
+      "runtime_setup": "다운로더 준비 중…"
+    },
+    "title": "MangaDex에서 가져오기",
+    "url": "MangaDex URL",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "만들기",
     "deleteAction": "프로젝트 삭제",

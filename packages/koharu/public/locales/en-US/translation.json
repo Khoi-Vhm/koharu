@@ -463,6 +463,34 @@
       "title": "Typesetting"
     }
   },
+  "mangadex": {
+    "cancelImport": "Cancel import",
+    "chooseDestination": "Choose destination",
+    "description": "Import every available chapter from a MangaDex title into a new project.",
+    "destination": "Destination folder",
+    "destinationCancelled": "No destination was selected.",
+    "destinationPlaceholder": "Choose a folder for the downloaded chapters",
+    "errorTitle": "MangaDex import could not continue",
+    "importFailed": "The MangaDex import failed.",
+    "language": "Chapter language",
+    "languagePlaceholder": "Choose a chapter language",
+    "noLanguages": "This MangaDex title has no available chapter languages.",
+    "open": "Import from MangaDex",
+    "resolve": "Find manga",
+    "startImport": "Import chapters",
+    "status": {
+      "cancelled": "Import cancelled.",
+      "cancelling": "Cancelling import…",
+      "downloading": "Downloading chapters…",
+      "failed": "Import failed.",
+      "finished": "Import complete.",
+      "importing": "Importing pages…",
+      "runtime_setup": "Preparing downloader…"
+    },
+    "title": "Import from MangaDex",
+    "url": "MangaDex URL",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "Create",
     "deleteAction": "Delete project",

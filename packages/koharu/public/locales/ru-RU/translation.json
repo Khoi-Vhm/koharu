@@ -463,6 +463,34 @@
       "title": "Вёрстка"
     }
   },
+  "mangadex": {
+    "cancelImport": "Отменить импорт",
+    "chooseDestination": "Выбрать папку",
+    "description": "Импортируйте все доступные главы выбранного произведения MangaDex в новый проект.",
+    "destination": "Папка назначения",
+    "destinationCancelled": "Папка назначения не выбрана.",
+    "destinationPlaceholder": "Выберите папку для скачанных глав",
+    "errorTitle": "Не удалось продолжить импорт MangaDex",
+    "importFailed": "Импорт MangaDex не выполнен.",
+    "language": "Язык глав",
+    "languagePlaceholder": "Выберите язык глав",
+    "noLanguages": "Для этого произведения MangaDex нет доступных языков глав.",
+    "open": "Импортировать из MangaDex",
+    "resolve": "Найти мангу",
+    "startImport": "Импортировать главы",
+    "status": {
+      "cancelled": "Импорт отменён.",
+      "cancelling": "Отмена импорта…",
+      "downloading": "Скачивание глав…",
+      "failed": "Импорт не выполнен.",
+      "finished": "Импорт завершён.",
+      "importing": "Импорт страниц…",
+      "runtime_setup": "Подготовка загрузчика…"
+    },
+    "title": "Импорт из MangaDex",
+    "url": "URL MangaDex",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "Создать",
     "deleteAction": "Удалить проект",

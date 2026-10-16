@@ -463,6 +463,34 @@
       "title": "排版"
     }
   },
+  "mangadex": {
+    "cancelImport": "取消导入",
+    "chooseDestination": "选择目标位置",
+    "description": "将 MangaDex 标题中所有可用章节导入新项目。",
+    "destination": "目标文件夹",
+    "destinationCancelled": "未选择目标位置。",
+    "destinationPlaceholder": "选择用于保存下载章节的文件夹",
+    "errorTitle": "无法继续 MangaDex 导入",
+    "importFailed": "MangaDex 导入失败。",
+    "language": "章节语言",
+    "languagePlaceholder": "选择章节语言",
+    "noLanguages": "此 MangaDex 标题没有可用的章节语言。",
+    "open": "从 MangaDex 导入",
+    "resolve": "查找漫画",
+    "startImport": "导入章节",
+    "status": {
+      "cancelled": "已取消导入。",
+      "cancelling": "正在取消导入…",
+      "downloading": "正在下载章节…",
+      "failed": "导入失败。",
+      "finished": "导入完成。",
+      "importing": "正在导入页面…",
+      "runtime_setup": "正在准备下载器…"
+    },
+    "title": "从 MangaDex 导入",
+    "url": "MangaDex URL",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "创建",
     "deleteAction": "删除项目",

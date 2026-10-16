@@ -463,6 +463,34 @@
       "title": "組版"
     }
   },
+  "mangadex": {
+    "cancelImport": "インポートをキャンセル",
+    "chooseDestination": "保存先を選択",
+    "description": "MangaDexの作品で利用可能なすべての話を新しいプロジェクトにインポートします。",
+    "destination": "保存先フォルダー",
+    "destinationCancelled": "保存先が選択されませんでした。",
+    "destinationPlaceholder": "ダウンロードした話を保存するフォルダーを選択",
+    "errorTitle": "MangaDexのインポートを続行できません",
+    "importFailed": "MangaDexのインポートに失敗しました。",
+    "language": "話の言語",
+    "languagePlaceholder": "話の言語を選択",
+    "noLanguages": "このMangaDex作品には利用可能な話の言語がありません。",
+    "open": "MangaDexからインポート",
+    "resolve": "マンガを検索",
+    "startImport": "話をインポート",
+    "status": {
+      "cancelled": "インポートをキャンセルしました。",
+      "cancelling": "インポートをキャンセル中…",
+      "downloading": "話をダウンロード中…",
+      "failed": "インポートに失敗しました。",
+      "finished": "インポートが完了しました。",
+      "importing": "ページをインポート中…",
+      "runtime_setup": "ダウンローダーを準備中…"
+    },
+    "title": "MangaDexからインポート",
+    "url": "MangaDex URL",
+    "urlPlaceholder": "https://mangadex.org/title/..."
+  },
   "start": {
     "create": "作成",
     "deleteAction": "プロジェクトを削除",

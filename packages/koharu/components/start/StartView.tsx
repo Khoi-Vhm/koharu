@@ -1,12 +1,13 @@
 'use client'
 
-import { Folder, FolderPlus, Plus, Settings, Trash2 } from 'lucide-react'
+import { Download, Folder, FolderPlus, Plus, Settings, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
 import { pageKey, pagesKey, projectKey, refresh } from '@/lib/queries'
 import { useKoharuStore } from '@/lib/store'
+import { MangaDexProjectDialog } from './MangaDexProjectDialog'
 import { commands, type ProjectSummary } from '@koharu/bridge/protocol'
 import {
   AlertDialog,
@@ -31,6 +32,7 @@ export function StartView() {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState<string | null>('list')
   const [projectToDelete, setProjectToDelete] = useState<string | null>(null)
+  const [mangadexOpen, setMangaDexOpen] = useState(false)
 
   const reload = useCallback(async () => {
     setBusy('list')
@@ -161,6 +163,18 @@ export function StartView() {
                   </Button>
                 </form>
 
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  className='mt-3 h-9 justify-center gap-1.5 text-[11px]'
+                  disabled={busy !== null}
+                  onClick={() => setMangaDexOpen(true)}
+                >
+                  <Download className='size-3.5' />
+                  {t('mangadex.open')}
+                </Button>
+
                 <p className='mt-auto pt-8 text-[10px] leading-4 text-muted-foreground'>
                   {t('start.storageHint')}
                 </p>
@@ -272,6 +286,14 @@ export function StartView() {
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
+      <MangaDexProjectDialog
+        open={mangadexOpen}
+        onOpenChange={setMangaDexOpen}
+        onSuccess={async () => {
+          setMangaDexOpen(false)
+          await refresh(projectKey, pagesKey, pageKey)
+        }}
+      />
     </AlertDialog>
   )
 }
