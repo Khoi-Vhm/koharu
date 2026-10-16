@@ -203,6 +203,36 @@ describe('StartView', () => {
     await waitFor(() => expect(start).toBeEnabled())
   })
 
+  it('does not start stale metadata while resolving a replacement MangaDex URL', async () => {
+    const { dialog, mocks } = await resolveManga()
+    mocks.pickMangadexOutputFolder.mockResolvedValue('/Users/example/Downloads')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Choose destination' }))
+    const start = within(dialog).getByRole('button', { name: 'Import chapters' })
+    await waitFor(() => expect(start).toBeEnabled())
+
+    let resolveReplacement:
+      | ((value: Awaited<ReturnType<MangaDexCommands['resolveMangadex']>>) => void)
+      | null = null
+    mocks.resolveMangadex.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveReplacement = resolve }),
+    )
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'MangaDex URL' }), {
+      target: { value: 'https://mangadex.org/title/87654321-1234-1234-1234-123456789abc' },
+    })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Find manga' }))
+
+    expect(start).toBeDisabled()
+    fireEvent.click(start)
+    expect(mocks.startMangadexImport).not.toHaveBeenCalled()
+
+    resolveReplacement?.({
+      manga_id: '87654321-1234-1234-1234-123456789abc',
+      title: 'New title',
+      languages: [],
+    })
+    await screen.findByDisplayValue('New title')
+  })
+
   it('shows native import progress and lets the user cancel an active import', async () => {
     const { dialog, mocks, url } = await resolveManga()
     mocks.pickMangadexOutputFolder.mockResolvedValue('/Users/example/Downloads')

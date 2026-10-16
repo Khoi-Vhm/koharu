@@ -80,7 +80,9 @@ export function MangaDexProjectDialog({
   const [destinationCancelled, setDestinationCancelled] = useState(false)
 
   const active = status !== null && activeStates.has(status)
-  const canStart = Boolean(name.trim() && url.trim() && language && output && !active)
+  const canStart = Boolean(
+    name.trim() && url.trim() && language && output && !active && status !== 'resolving',
+  )
 
   async function resolve() {
     const mangaUrl = url.trim()

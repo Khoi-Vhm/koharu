@@ -17,3 +17,8 @@
 ## Generated bridge limitation
 
 `packages/bridge/src/protocol.ts` remains unchanged because it is generated source and the required Cargo/Rust generator is unavailable. The dialog uses a local expected view of the four Task 4 commands and their registered native payloads, so TypeScript checking cannot complete until `cargo run -p koharu-app --bin generate` refreshes the protocol.
+
+## Review fix
+
+- Import now stays disabled while replacement MangaDex metadata is resolving, so a previously resolved title and language cannot be submitted with a newly entered URL.
+- Added a component regression that holds the replacement metadata request pending and asserts the stale import cannot start.
