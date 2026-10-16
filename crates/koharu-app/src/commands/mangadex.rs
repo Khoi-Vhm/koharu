@@ -767,7 +767,8 @@ mod tests {
     use super::{
         ChapterManifest, ImportTransition, MangaDexImportControl, begin_import_commit,
         MangaDexImportEvent, MangaDexImportState, cancel_transition, cancelable,
-        chapter_manifest_at, chapter_url, finish_import_commit, manga_id,
+        chapter_manifest_at, chapter_url, finish_import_commit, import_downloaded_chapters,
+        manga_id,
         prepare_chapter_download_folder, prepare_download_folder, rename_downloaded_pages,
         resolve_manga_at, resolve_mangadex,
     };
