@@ -229,9 +229,9 @@ async fn run_mangadex_import(
     on_event: &Channel<MangaDexImportEvent>,
     job_id: &str,
 ) -> Result<()> {
+    create_and_open_project(handle, name).await?;
     let manifest = cancelable(cancelled, chapter_manifest(manga_id, language)).await?;
     ensure!(!manifest.is_empty(), "MangaDex has no chapters for the selected language");
-    create_and_open_project(handle, name).await?;
 
     let downloader = cancelable(cancelled, MangaDexDownloader::prepare()).await?;
     let download = prepare_download_folder(output, manga_id)?;
