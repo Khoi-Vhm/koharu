@@ -11,7 +11,7 @@ use koharu_runtime::{MangaDexDownloader, http_client};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use specta::Type;
-use tauri::{AppHandle, Manager as _, ipc::Channel};
+use tauri::{AppHandle, Manager as _, WebviewWindow, ipc::Channel};
 use tauri_runtime_cef::CefRuntime;
 use tokio::{io::AsyncReadExt as _, process::Child, sync::watch, time::Duration};
 use url::Url;
@@ -93,6 +93,28 @@ pub(crate) async fn chapter_manifest(manga_id: &str, language: &str) -> Result<V
     chapter_manifest_at(manga_id, language, API).await
 }
 
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn resolve_mangadex(
+    url: String,
+) -> std::result::Result<MangaDexMetadata, Error> {
+    Ok(resolve_manga(&url).await?)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn pick_mangadex_output_folder(
+    window: WebviewWindow<CefRuntime>,
+) -> std::result::Result<Option<String>, Error> {
+    Ok(rfd::AsyncFileDialog::new()
+        .set_parent(&window)
+        .pick_folder()
+        .await
+        .map(|folder| folder.path().to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn start_mangadex_import(
     name: String,
     url: String,
@@ -174,6 +196,8 @@ fn validate_import_request(name: &str, url: &str, language: &str, output: &Path)
     Ok(manga_id)
 }
 
+#[tauri::command]
+#[specta::specta]
 pub(crate) async fn cancel_mangadex_import(
     job_id: String,
     handle: AppHandle<CefRuntime>,
@@ -719,8 +743,9 @@ mod tests {
 
     use super::{
         ChapterManifest, ImportTransition, MangaDexImportControl, begin_import_commit,
-        cancel_transition, cancelable, chapter_manifest_at, finish_import_commit, manga_id,
-        prepare_download_folder, rename_downloaded_pages, resolve_manga_at,
+        MangaDexImportEvent, MangaDexImportState, cancel_transition, cancelable,
+        chapter_manifest_at, finish_import_commit, manga_id, prepare_download_folder,
+        rename_downloaded_pages, resolve_manga_at, resolve_mangadex,
     };
 
     const MANGA_ID: &str = "b3f7d2b9-23f5-4b31-a042-40b7943c3983";
@@ -879,6 +904,39 @@ mod tests {
         ] {
             assert!(manga_id(url).is_err(), "{url} should be rejected");
         }
+    }
+
+    #[tokio::test]
+    async fn resolve_command_rejects_an_invalid_url_before_requesting_metadata() {
+        let error = resolve_mangadex("https://example.com/title/not-a-manga".to_owned())
+            .await
+            .expect_err("invalid MangaDex URL must be rejected");
+
+        assert!(
+            serde_json::to_value(&error)
+                .expect("serialize command error")
+                .as_str()
+                .expect("command error is a string")
+                .contains("MangaDex")
+        );
+    }
+
+    #[test]
+    fn import_events_serialize_for_the_typed_protocol() {
+        let event = MangaDexImportEvent {
+            job_id: "job-123".to_owned(),
+            state: MangaDexImportState::RuntimeSetup,
+            error: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).expect("serialize import event"),
+            serde_json::json!({
+                "job_id": "job-123",
+                "state": "runtime_setup",
+                "error": null,
+            })
+        );
     }
 
     #[tokio::test]

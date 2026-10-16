@@ -107,6 +107,10 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             canvas::commit_erase,
             canvas::commit_transform,
             canvas::commit_inpaint,
+            mangadex::resolve_mangadex,
+            mangadex::pick_mangadex_output_folder,
+            mangadex::start_mangadex_import,
+            mangadex::cancel_mangadex_import,
         ])
         .disable_serde_phases()
         .error_handling(ErrorHandlingMode::Throw)
