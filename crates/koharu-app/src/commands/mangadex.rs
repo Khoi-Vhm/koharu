@@ -254,7 +254,7 @@ async fn run_mangadex_import(
     publish(on_event, job_id, MangaDexImportState::Importing);
     let download = download.clone();
     let pages = cancelable(cancelled, async move {
-        tokio_rayon::spawn(move || import::import_folder(&download))
+        tokio_rayon::spawn(move || import_downloaded_chapters(&download, &manifest))
             .await
             .context("MangaDex page import task failed")?
     })
@@ -270,6 +270,17 @@ async fn run_mangadex_import(
     .await;
     finish_import_commit(control).await;
     result
+}
+
+fn import_downloaded_chapters(
+    download: &Path,
+    manifest: &[ChapterManifest],
+) -> Result<Vec<import::Page>> {
+    let mut pages = Vec::new();
+    for chapter in manifest {
+        pages.append(&mut import::import_folder(&download.join(&chapter.id))?);
+    }
+    Ok(pages)
 }
 
 async fn cancel_transition(control: &MangaDexImportControl) -> Result<()> {
@@ -743,7 +754,7 @@ struct ChapterAttributes {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, io::Cursor};
     use std::sync::Arc;
 
     use tokio::{
@@ -815,11 +826,58 @@ mod tests {
     }
 
     #[test]
+    fn imports_duplicate_chapter_labels_in_manifest_order_despite_reversed_uuid_roots() {
+        let directory = tempfile::tempdir().expect("create output directory");
+        let first_id = "f0000000-0000-0000-0000-000000000000";
+        let second_id = "10000000-0000-0000-0000-000000000000";
+        let first = prepare_chapter_download_folder(directory.path(), first_id)
+            .expect("create first chapter root");
+        let second = prepare_chapter_download_folder(directory.path(), second_id)
+            .expect("create second chapter root");
+        let first_page = png([255, 0, 0, 255]);
+        let second_page = png([0, 255, 0, 255]);
+        fs::write(first.join("chapter 1 page 1.png"), &first_page).expect("write first page");
+        fs::write(second.join("chapter 1 page 1.png"), &second_page)
+            .expect("write second page");
+        let manifest = [
+            ChapterManifest {
+                id: first_id.to_owned(),
+                number: "1".to_owned(),
+                page_count: 1,
+            },
+            ChapterManifest {
+                id: second_id.to_owned(),
+                number: "1".to_owned(),
+                page_count: 1,
+            },
+        ];
+
+        let pages = import_downloaded_chapters(directory.path(), &manifest)
+            .expect("import chapter pages");
+
+        assert_eq!(
+            pages.iter().map(|page| page.name.as_str()).collect::<Vec<_>>(),
+            ["chapter 1 page 1.png", "chapter 1 page 1.png"]
+        );
+        assert_eq!(pages[0].bytes.as_ref(), first_page.as_slice());
+        assert_eq!(pages[1].bytes.as_ref(), second_page.as_slice());
+    }
+
+    #[test]
     fn downloads_each_manifest_entry_from_its_chapter_url() {
         assert_eq!(
             chapter_url("first-id"),
             "https://mangadex.org/chapter/first-id"
         );
+    }
+
+    fn png(pixel: [u8; 4]) -> Vec<u8> {
+        let image = image::RgbaImage::from_pixel(1, 1, image::Rgba(pixel));
+        let mut encoded = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .expect("encode fixture");
+        encoded.into_inner()
     }
 
     #[test]
