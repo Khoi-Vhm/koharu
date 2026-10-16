@@ -54,6 +54,15 @@ pub(crate) struct MangaDexImports {
 struct MangaDexImportControl {
     cancelled: watch::Sender<bool>,
     child: Arc<tokio::sync::Mutex<Option<Child>>>,
+    transition: Arc<tokio::sync::Mutex<ImportTransition>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImportTransition {
+    Active,
+    Committing,
+    Completed,
+    Cancelled,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -100,6 +109,7 @@ pub(crate) async fn start_mangadex_import(
     let control = MangaDexImportControl {
         cancelled,
         child: Arc::new(tokio::sync::Mutex::new(None)),
+        transition: Arc::new(tokio::sync::Mutex::new(ImportTransition::Active)),
     };
     handle
         .state::<MangaDexImports>()
@@ -175,9 +185,9 @@ pub(crate) async fn cancel_mangadex_import(
             .get(&job_id)
             .cloned()
             .context("MangaDex import job does not exist")?;
-        control.cancelled.send_replace(true);
         control
     };
+    cancel_transition(&control).await?;
     if let Some(child) = control.child.lock().await.as_mut() {
         let _ = child.start_kill();
     }
@@ -217,19 +227,47 @@ async fn run_mangadex_import(
     })
     .await?;
     ensure!(!pages.is_empty(), "MangaDex downloader did not produce supported images");
-    ensure_not_cancelled(cancelled)?;
-    lifecycle::import_pages(
+    begin_import_commit(control).await?;
+    let result = lifecycle::import_pages(
         handle.state::<koharu_desktop::Desktop>().inner(),
         handle.state::<CurrentProject>().inner(),
         handle.state::<CanvasChannel>().inner(),
         pages,
     )
-    .await
+    .await;
+    finish_import_commit(control).await;
+    result
 }
 
-fn ensure_not_cancelled(cancelled: &watch::Receiver<bool>) -> Result<()> {
-    ensure!(!*cancelled.borrow(), "MangaDex import cancelled");
+async fn cancel_transition(control: &MangaDexImportControl) -> Result<()> {
+    let mut transition = control.transition.lock().await;
+    ensure!(
+        matches!(*transition, ImportTransition::Active),
+        "MangaDex import is already completing"
+    );
+    *transition = ImportTransition::Cancelled;
+    control.cancelled.send_replace(true);
     Ok(())
+}
+
+async fn begin_import_commit(control: &MangaDexImportControl) -> Result<()> {
+    let mut transition = control.transition.lock().await;
+    match *transition {
+        ImportTransition::Active => {
+            *transition = ImportTransition::Committing;
+            Ok(())
+        }
+        ImportTransition::Cancelled => bail!("MangaDex import cancelled"),
+        ImportTransition::Committing | ImportTransition::Completed => {
+            bail!("MangaDex import is already completing")
+        }
+    }
+}
+
+async fn finish_import_commit(control: &MangaDexImportControl) {
+    let mut transition = control.transition.lock().await;
+    debug_assert!(matches!(*transition, ImportTransition::Committing));
+    *transition = ImportTransition::Completed;
 }
 
 async fn open_or_create_project(handle: &AppHandle<CefRuntime>, name: &str) -> Result<()> {
@@ -680,7 +718,8 @@ mod tests {
     };
 
     use super::{
-        ChapterManifest, cancelable, chapter_manifest_at, ensure_not_cancelled, manga_id,
+        ChapterManifest, ImportTransition, MangaDexImportControl, begin_import_commit,
+        cancel_transition, cancelable, chapter_manifest_at, finish_import_commit, manga_id,
         prepare_download_folder, rename_downloaded_pages, resolve_manga_at,
     };
 
@@ -780,15 +819,44 @@ mod tests {
         assert!(error.to_string().contains("cancelled"));
     }
 
-    #[test]
-    fn cancellation_after_decoding_prevents_import_commit() {
-        let (sender, cancelled) = tokio::sync::watch::channel(false);
-        let decoded_pages = 1;
-        sender.send_replace(true);
+    #[tokio::test]
+    async fn commit_transition_rejects_cancellation_after_decoding() {
+        let (control, _) = import_control();
 
-        let committed_pages = ensure_not_cancelled(&cancelled).map(|()| decoded_pages);
+        begin_import_commit(&control)
+            .await
+            .expect("decoded pages claim the commit transition");
+        let cancellation = cancel_transition(&control).await;
 
-        assert!(committed_pages.is_err());
+        assert!(cancellation.is_err());
+        finish_import_commit(&control).await;
+        assert_eq!(*control.transition.lock().await, ImportTransition::Completed);
+    }
+
+    #[tokio::test]
+    async fn cancellation_transition_prevents_commit_after_decoding() {
+        let (control, mut cancelled) = import_control();
+
+        cancel_transition(&control)
+            .await
+            .expect("cancellation claims the active transition");
+        let commit = begin_import_commit(&control).await;
+
+        assert!(commit.is_err());
+        assert!(*cancelled.borrow_and_update());
+        assert_eq!(*control.transition.lock().await, ImportTransition::Cancelled);
+    }
+
+    fn import_control() -> (MangaDexImportControl, tokio::sync::watch::Receiver<bool>) {
+        let (cancelled, receiver) = tokio::sync::watch::channel(false);
+        (
+            MangaDexImportControl {
+                cancelled,
+                child: Arc::new(tokio::sync::Mutex::new(None)),
+                transition: Arc::new(tokio::sync::Mutex::new(ImportTransition::Active)),
+            },
+            receiver,
+        )
     }
 
     #[test]
