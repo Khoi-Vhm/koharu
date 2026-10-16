@@ -76,6 +76,10 @@ export const commands = {
 	commitErase: (expectedRevision: Revision, layer: EntityId, points: Point[], diameter: number) => __TAURI_INVOKE<LayerCommit>("commit_erase", { expectedRevision, layer, points: points.map(i=>i), diameter }),
 	commitTransform: (expectedRevision: Revision, elements: TransformFrame[]) => __TAURI_INVOKE<number | null>("commit_transform", { expectedRevision, elements }).then((v) => (v==null?v:v as typeof v)),
 	commitInpaint: (expectedRevision: Revision, points: Point[], diameter: number) => __TAURI_INVOKE<string | null>("commit_inpaint", { expectedRevision, points: points.map(i=>i), diameter }),
+	resolveMangadex: (url: string) => __TAURI_INVOKE<MangaDexMetadata>("resolve_mangadex", { url }),
+	pickMangadexOutputFolder: () => __TAURI_INVOKE<string | null>("pick_mangadex_output_folder"),
+	startMangadexImport: (name: string, url: string, language: string, output: string, onEvent: Channel<MangaDexImportEvent>) => __TAURI_INVOKE<string>("start_mangadex_import", { name, url, language, output, onEvent }),
+	cancelMangadexImport: (jobId: string) => __TAURI_INVOKE<null>("cancel_mangadex_import", { jobId }),
 };
 
 /* Types */
@@ -309,6 +313,25 @@ export type LmStudioConfig = {
 export type LocalConfig = Record<string, never>;
 
 export type LoginEvent = { type: "progress"; message: string } | { type: "device_code"; verification_url: string; user_code: string };
+
+export type MangaDexImportEvent = {
+	job_id: string,
+	state: MangaDexImportState,
+	error: string | null,
+};
+
+export type MangaDexImportState = "runtime_setup" | "downloading" | "importing" | "finished" | "failed" | "cancelled";
+
+export type MangaDexLanguage = {
+	code: string,
+	name: string,
+};
+
+export type MangaDexMetadata = {
+	manga_id: string,
+	title: string,
+	languages: MangaDexLanguage[],
+};
 
 export type MiniMaxConfig = Record<string, never>;
 

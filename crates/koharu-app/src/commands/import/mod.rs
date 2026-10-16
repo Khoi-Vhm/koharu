@@ -176,14 +176,18 @@ mod tests {
     fn folder_import_recursively_discovers_supported_images() {
         let directory = tempfile::tempdir().expect("create fixture directory");
         fs::create_dir(directory.path().join("chapter")).expect("create chapter directory");
-        fs::write(directory.path().join("cover.txt"), b"not an image").expect("write unrelated file");
+        fs::write(directory.path().join("cover.txt"), b"not an image")
+            .expect("write unrelated file");
         fs::write(directory.path().join("chapter/page2.PNG"), png()).expect("write nested image");
         fs::write(directory.path().join("page1.png"), png()).expect("write top-level image");
 
         let pages = import_folder(directory.path()).expect("import supported images");
 
         assert_eq!(
-            pages.iter().map(|page| page.name.as_str()).collect::<Vec<_>>(),
+            pages
+                .iter()
+                .map(|page| page.name.as_str())
+                .collect::<Vec<_>>(),
             ["page1.png", "page2.PNG"]
         );
     }

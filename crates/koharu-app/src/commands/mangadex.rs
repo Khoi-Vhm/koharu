@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use koharu_runtime::{MangaDexDownloader, http_client};
+use koharu_runtime::{http_client, mangadex::MangaDexDownloader};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use specta::Type;
@@ -19,8 +19,8 @@ use walkdir::WalkDir;
 
 use super::{
     Error,
-    import,
-    lifecycle::{self, CanvasChannel},
+    canvas::CanvasChannel,
+    import, lifecycle,
     project::{CurrentProject, ProjectLibrary},
 };
 
@@ -89,15 +89,16 @@ pub(crate) async fn resolve_manga(url: &str) -> Result<MangaDexMetadata> {
     resolve_manga_at(url, API).await
 }
 
-pub(crate) async fn chapter_manifest(manga_id: &str, language: &str) -> Result<Vec<ChapterManifest>> {
+pub(crate) async fn chapter_manifest(
+    manga_id: &str,
+    language: &str,
+) -> Result<Vec<ChapterManifest>> {
     chapter_manifest_at(manga_id, language, API).await
 }
 
 #[tauri::command]
 #[specta::specta]
-pub(crate) async fn resolve_mangadex(
-    url: String,
-) -> std::result::Result<MangaDexMetadata, Error> {
+pub(crate) async fn resolve_mangadex(url: String) -> std::result::Result<MangaDexMetadata, Error> {
     Ok(resolve_manga(&url).await?)
 }
 
@@ -157,8 +158,7 @@ pub(crate) async fn start_mangadex_import(
         )
         .await;
         let cancelled = {
-            let imports = task_handle
-                .state::<MangaDexImports>();
+            let imports = task_handle.state::<MangaDexImports>();
             let mut jobs = imports.jobs.lock();
             let cancelled = *receiver.borrow();
             jobs.remove(&task_job_id);
@@ -189,8 +189,14 @@ pub(crate) async fn start_mangadex_import(
 fn validate_import_request(name: &str, url: &str, language: &str, output: &Path) -> Result<String> {
     ensure!(!name.trim().is_empty(), "project name cannot be empty");
     let manga_id = manga_id(url)?;
-    ensure!(!language.trim().is_empty(), "MangaDex language cannot be empty");
-    ensure!(output.is_absolute(), "MangaDex output folder must be absolute");
+    ensure!(
+        !language.trim().is_empty(),
+        "MangaDex language cannot be empty"
+    );
+    ensure!(
+        output.is_absolute(),
+        "MangaDex output folder must be absolute"
+    );
     ensure!(output.is_dir(), "MangaDex output folder does not exist");
     Ok(manga_id)
 }
@@ -231,7 +237,10 @@ async fn run_mangadex_import(
 ) -> Result<()> {
     create_and_open_project(handle, name).await?;
     let manifest = cancelable(cancelled, chapter_manifest(manga_id, language)).await?;
-    ensure!(!manifest.is_empty(), "MangaDex has no chapters for the selected language");
+    ensure!(
+        !manifest.is_empty(),
+        "MangaDex has no chapters for the selected language"
+    );
 
     let downloader = cancelable(cancelled, MangaDexDownloader::prepare()).await?;
     let download = prepare_download_folder(output, manga_id)?;
@@ -254,12 +263,17 @@ async fn run_mangadex_import(
     publish(on_event, job_id, MangaDexImportState::Importing);
     let download = download.clone();
     let pages = cancelable(cancelled, async move {
-        tokio_rayon::spawn(move || import_downloaded_chapters(&download, &manifest))
-            .await
-            .context("MangaDex page import task failed")?
+        Ok(
+            tokio_rayon::spawn(move || import_downloaded_chapters(&download, &manifest))
+                .await
+                .context("MangaDex page import task failed")?,
+        )
     })
     .await?;
-    ensure!(!pages.is_empty(), "MangaDex downloader did not produce supported images");
+    ensure!(
+        !pages.is_empty(),
+        "MangaDex downloader did not produce supported images"
+    );
     begin_import_commit(control).await?;
     let result = lifecycle::import_pages(
         handle.state::<koharu_desktop::Desktop>().inner(),
@@ -354,17 +368,20 @@ async fn run_downloader(
     control: &MangaDexImportControl,
     cancelled: &mut watch::Receiver<bool>,
 ) -> Result<()> {
-    ensure!(
-        !*cancelled.borrow_and_update(),
-        "MangaDex import cancelled"
-    );
+    ensure!(!*cancelled.borrow_and_update(), "MangaDex import cancelled");
     let mut command = downloader.command(url, language, output);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .context("failed to start MangaDex Downloader")?;
-    let stdout = child.stdout.take().context("MangaDex Downloader stdout is unavailable")?;
-    let stderr = child.stderr.take().context("MangaDex Downloader stderr is unavailable")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("MangaDex Downloader stdout is unavailable")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("MangaDex Downloader stderr is unavailable")?;
     let stdout = tokio::spawn(async move {
         let mut output = Vec::new();
         let mut stdout = stdout;
@@ -402,8 +419,12 @@ async fn run_downloader(
         }
     };
     control.child.lock().await.take();
-    let stdout = stdout.await.context("MangaDex Downloader stdout task failed")??;
-    let stderr = stderr.await.context("MangaDex Downloader stderr task failed")??;
+    let stdout = stdout
+        .await
+        .context("MangaDex Downloader stdout task failed")??;
+    let stderr = stderr
+        .await
+        .context("MangaDex Downloader stderr task failed")??;
     if *cancelled.borrow() {
         bail!("MangaDex import cancelled");
     }
@@ -428,15 +449,20 @@ fn prepare_download_folder(output: &Path, manga_id: &str) -> Result<PathBuf> {
         "MangaDex output folder {} already exists",
         folder.display()
     );
-    std::fs::create_dir(&folder)
-        .with_context(|| format!("failed to create MangaDex output folder {}", folder.display()))?;
+    std::fs::create_dir(&folder).with_context(|| {
+        format!(
+            "failed to create MangaDex output folder {}",
+            folder.display()
+        )
+    })?;
     Ok(folder)
 }
 
 fn prepare_chapter_download_folder(download: &Path, chapter_id: &str) -> Result<PathBuf> {
     let id = Path::new(chapter_id);
     ensure!(
-        id.file_name().is_some_and(|name| name == OsStr::new(chapter_id)),
+        id.file_name()
+            .is_some_and(|name| name == OsStr::new(chapter_id)),
         "MangaDex chapter ID is not a path component"
     );
     let folder = download.join(id);
@@ -505,15 +531,22 @@ fn rename_downloaded_pages(download: &Path, chapter: &ChapterManifest) -> Result
         if source == target {
             continue;
         }
-        let temporary = source.with_file_name(format!(".koharu-mangadex-{index}-{}", uuid::Uuid::new_v4()));
+        let temporary =
+            source.with_file_name(format!(".koharu-mangadex-{index}-{}", uuid::Uuid::new_v4()));
         if temporary.exists() {
             rollback_renames(&staged, 0);
-            bail!("refusing to overwrite temporary downloaded page {}", temporary.display());
+            bail!(
+                "refusing to overwrite temporary downloaded page {}",
+                temporary.display()
+            );
         }
         if let Err(error) = std::fs::rename(&source, &temporary) {
             rollback_renames(&staged, 0);
             return Err(error).with_context(|| {
-                format!("failed to stage downloaded page {} for renaming", source.display())
+                format!(
+                    "failed to stage downloaded page {} for renaming",
+                    source.display()
+                )
             });
         }
         staged.push((source, temporary, target));
@@ -532,8 +565,9 @@ fn rename_downloaded_pages(download: &Path, chapter: &ChapterManifest) -> Result
         }
     }
     for cover in covers {
-        std::fs::remove_file(&cover)
-            .with_context(|| format!("failed to remove MangaDex cover image {}", cover.display()))?;
+        std::fs::remove_file(&cover).with_context(|| {
+            format!("failed to remove MangaDex cover image {}", cover.display())
+        })?;
     }
     Ok(())
 }
@@ -550,7 +584,12 @@ fn rollback_renames(staged: &[(PathBuf, PathBuf, PathBuf)], completed: usize) {
 fn is_supported_image(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
-        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp"
+            )
+        })
 }
 
 fn is_cover_image(path: &Path) -> bool {
@@ -778,8 +817,8 @@ struct ChapterAttributes {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, io::Cursor};
     use std::sync::Arc;
+    use std::{fs, io::Cursor};
 
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -789,12 +828,11 @@ mod tests {
     };
 
     use super::{
-        ChapterManifest, ImportTransition, MangaDexImportControl, begin_import_commit,
-        MangaDexImportEvent, MangaDexImportState, cancel_transition, cancelable,
+        ChapterManifest, ImportTransition, MangaDexImportControl, MangaDexImportEvent,
+        MangaDexImportState, begin_import_commit, cancel_transition, cancelable,
         chapter_manifest_at, chapter_url, finish_import_commit, import_downloaded_chapters,
-        manga_id,
-        prepare_chapter_download_folder, prepare_download_folder, rename_downloaded_pages,
-        resolve_manga_at, resolve_mangadex,
+        manga_id, prepare_chapter_download_folder, prepare_download_folder,
+        rename_downloaded_pages, resolve_manga_at, resolve_mangadex,
     };
 
     const MANGA_ID: &str = "b3f7d2b9-23f5-4b31-a042-40b7943c3983";
@@ -802,7 +840,11 @@ mod tests {
     #[test]
     fn renames_raw_pages_in_a_human_readable_chapter_folder_without_changing_extensions() {
         let directory = tempfile::tempdir().expect("create output directory");
-        let raw = directory.path().join("A Manga").join("Volume 1").join("Chapter 1");
+        let raw = directory
+            .path()
+            .join("A Manga")
+            .join("Volume 1")
+            .join("Chapter 1");
         fs::create_dir_all(&raw).expect("create raw chapter");
         fs::write(directory.path().join("cover.jpg"), b"cover").expect("write cover");
         fs::write(raw.join("z.webp"), b"page").expect("write page");
@@ -833,17 +875,23 @@ mod tests {
         fs::write(first.join("one.jpg"), b"page").expect("write first page");
         fs::write(second.join("one.jpg"), b"page").expect("write second page");
 
-        rename_downloaded_pages(&first, &ChapterManifest {
-            id: "first-id".to_owned(),
-            number: "1".to_owned(),
-            page_count: 1,
-        })
+        rename_downloaded_pages(
+            &first,
+            &ChapterManifest {
+                id: "first-id".to_owned(),
+                number: "1".to_owned(),
+                page_count: 1,
+            },
+        )
         .expect("rename first chapter");
-        rename_downloaded_pages(&second, &ChapterManifest {
-            id: "second-id".to_owned(),
-            number: "1".to_owned(),
-            page_count: 1,
-        })
+        rename_downloaded_pages(
+            &second,
+            &ChapterManifest {
+                id: "second-id".to_owned(),
+                number: "1".to_owned(),
+                page_count: 1,
+            },
+        )
         .expect("rename second chapter");
 
         assert!(first.join("chapter 1 page 1.jpg").is_file());
@@ -862,8 +910,7 @@ mod tests {
         let first_page = png([255, 0, 0, 255]);
         let second_page = png([0, 255, 0, 255]);
         fs::write(first.join("chapter 1 page 1.png"), &first_page).expect("write first page");
-        fs::write(second.join("chapter 1 page 1.png"), &second_page)
-            .expect("write second page");
+        fs::write(second.join("chapter 1 page 1.png"), &second_page).expect("write second page");
         let manifest = [
             ChapterManifest {
                 id: first_id.to_owned(),
@@ -877,11 +924,14 @@ mod tests {
             },
         ];
 
-        let pages = import_downloaded_chapters(directory.path(), &manifest)
-            .expect("import chapter pages");
+        let pages =
+            import_downloaded_chapters(directory.path(), &manifest).expect("import chapter pages");
 
         assert_eq!(
-            pages.iter().map(|page| page.name.as_str()).collect::<Vec<_>>(),
+            pages
+                .iter()
+                .map(|page| page.name.as_str())
+                .collect::<Vec<_>>(),
             ["chapter 1 page 1.png", "chapter 1 page 1.png"]
         );
         assert_eq!(pages[0].bytes.as_ref(), first_page.as_slice());
@@ -953,7 +1003,10 @@ mod tests {
 
         assert!(cancellation.is_err());
         finish_import_commit(&control).await;
-        assert_eq!(*control.transition.lock().await, ImportTransition::Completed);
+        assert_eq!(
+            *control.transition.lock().await,
+            ImportTransition::Completed
+        );
     }
 
     #[tokio::test]
@@ -967,7 +1020,10 @@ mod tests {
 
         assert!(commit.is_err());
         assert!(*cancelled.borrow_and_update());
-        assert_eq!(*control.transition.lock().await, ImportTransition::Cancelled);
+        assert_eq!(
+            *control.transition.lock().await,
+            ImportTransition::Cancelled
+        );
     }
 
     fn import_control() -> (MangaDexImportControl, tokio::sync::watch::Receiver<bool>) {
@@ -1138,7 +1194,11 @@ mod tests {
         );
         let requests = server.requests().await;
         assert_eq!(requests.len(), 2);
-        assert!(requests.iter().all(|request| request.contains("translatedLanguage%5B%5D=en")));
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.contains("translatedLanguage%5B%5D=en"))
+        );
         assert!(requests[0].contains("offset=0"));
         assert!(requests[1].contains("offset=2"));
     }

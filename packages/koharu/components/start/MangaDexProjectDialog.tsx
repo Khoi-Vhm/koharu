@@ -6,7 +6,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
-import { mangaDexCommands, type MangaDexImportEvent } from '@/lib/mangadex'
+import { commands, type MangaDexImportEvent } from '@koharu/bridge/protocol'
 import { Alert, AlertDescription, AlertTitle } from '@koharu/ui/components/alert'
 import { Button } from '@koharu/ui/components/button'
 import {
@@ -56,7 +56,13 @@ export function MangaDexProjectDialog({
 
   const active = status !== null && activeStates.has(status)
   const canStart = Boolean(
-    name.trim() && url.trim() && resolvedUrl === url.trim() && language && output && !active && status !== 'resolving',
+    name.trim() &&
+    url.trim() &&
+    resolvedUrl === url.trim() &&
+    language &&
+    output &&
+    !active &&
+    status !== 'resolving',
   )
 
   async function resolve() {
@@ -69,7 +75,7 @@ export function MangaDexProjectDialog({
     setLanguages([])
     setLanguage(null)
     try {
-      const metadata = await call(mangaDexCommands.resolve, mangaUrl)
+      const metadata = await call(commands.resolveMangadex, mangaUrl)
       if (generation !== resolveGeneration.current) return
       setName(metadata.title)
       setLanguages(metadata.languages)
@@ -89,7 +95,7 @@ export function MangaDexProjectDialog({
     setError(null)
     setDestinationCancelled(false)
     try {
-      const selected = await call(mangaDexCommands.pickOutputFolder)
+      const selected = await call(commands.pickMangadexOutputFolder)
       if (selected) setOutput(selected)
       else setDestinationCancelled(true)
     } catch (error) {
@@ -111,7 +117,7 @@ export function MangaDexProjectDialog({
     }
     try {
       const started = await call(
-        mangaDexCommands.startImport,
+        commands.startMangadexImport,
         name.trim(),
         url.trim(),
         language,
@@ -130,7 +136,7 @@ export function MangaDexProjectDialog({
     setError(null)
     setStatus('cancelling')
     try {
-      await call(mangaDexCommands.cancelImport, jobId)
+      await call(commands.cancelMangadexImport, jobId)
     } catch (error) {
       setStatus('failed')
       setError(errorMessage(error))
@@ -151,8 +157,8 @@ export function MangaDexProjectDialog({
         </DialogHeader>
 
         <div className='grid gap-3'>
-          <label className='grid gap-1.5 text-[11px] font-medium' htmlFor='mangadex-url'>
-            {t('mangadex.url')}
+          <div className='grid gap-1.5 text-[11px] font-medium'>
+            <label htmlFor='mangadex-url'>{t('mangadex.url')}</label>
             <div className='flex gap-2'>
               <Input
                 id='mangadex-url'
@@ -182,7 +188,7 @@ export function MangaDexProjectDialog({
                 {t('mangadex.resolve')}
               </Button>
             </div>
-          </label>
+          </div>
 
           <label className='grid gap-1.5 text-[11px] font-medium' htmlFor='mangadex-project-name'>
             {t('start.projectName')}
@@ -200,6 +206,9 @@ export function MangaDexProjectDialog({
             {t('mangadex.language')}
             <Select
               value={language ?? undefined}
+              itemToStringLabel={(code) =>
+                languages.find((item) => item.code === code)?.name ?? code
+              }
               onValueChange={setLanguage}
               disabled={active || !languages.length}
             >

@@ -1,11 +1,11 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { StartView } from '@/components/start/StartView'
-import { mangaDexCommands, type MangaDexImportEvent } from '@/lib/mangadex'
 import { queryClient, useProject } from '@/lib/queries'
-import { commands } from '@koharu/bridge/protocol'
+import { commands, type MangaDexImportEvent } from '@koharu/bridge/protocol'
 
 type MangaDexEvent = MangaDexImportEvent
 
@@ -28,11 +28,15 @@ describe('StartView', () => {
   })
 
   function setupMangaDex() {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: { transformCallback: vi.fn(() => 'mangadex-channel') },
+    })
     vi.spyOn(commands, 'listProjects').mockResolvedValue([])
-    const resolveMangadex = vi.spyOn(mangaDexCommands, 'resolve')
-    const pickMangadexOutputFolder = vi.spyOn(mangaDexCommands, 'pickOutputFolder')
-    const startMangadexImport = vi.spyOn(mangaDexCommands, 'startImport')
-    const cancelMangadexImport = vi.spyOn(mangaDexCommands, 'cancelImport')
+    const resolveMangadex = vi.spyOn(commands, 'resolveMangadex')
+    const pickMangadexOutputFolder = vi.spyOn(commands, 'pickMangadexOutputFolder')
+    const startMangadexImport = vi.spyOn(commands, 'startMangadexImport')
+    const cancelMangadexImport = vi.spyOn(commands, 'cancelMangadexImport')
     return { resolveMangadex, pickMangadexOutputFolder, startMangadexImport, cancelMangadexImport }
   }
 
@@ -56,7 +60,9 @@ describe('StartView', () => {
     })
     render(<StartView />)
     const dialog = await openMangaDexDialog()
-    fireEvent.change(screen.getByRole('textbox', { name: 'MangaDex URL' }), { target: { value: url } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'MangaDex URL' }), {
+      target: { value: url },
+    })
     fireEvent.click(screen.getByRole('button', { name: 'Find manga' }))
     await waitFor(() => expect(mocks.resolveMangadex).toHaveBeenCalledWith(url))
     await screen.findByDisplayValue(title)
@@ -153,9 +159,10 @@ describe('StartView', () => {
 
   it('lets the user choose an available chapter language', async () => {
     const { dialog } = await resolveManga()
+    const user = userEvent.setup()
 
-    fireEvent.click(within(dialog).getByRole('combobox', { name: 'Chapter language' }))
-    fireEvent.click(await screen.findByRole('option', { name: 'Japanese' }))
+    await user.click(within(dialog).getByRole('combobox', { name: 'Chapter language' }))
+    await user.click(await screen.findByRole('option', { name: 'Japanese' }))
     expect(within(dialog).getByRole('combobox', { name: 'Chapter language' })).toHaveTextContent(
       'Japanese',
     )
@@ -195,10 +202,13 @@ describe('StartView', () => {
     await waitFor(() => expect(start).toBeEnabled())
 
     let resolveReplacement:
-      | ((value: Awaited<ReturnType<typeof mangaDexCommands.resolve>>) => void)
+      | ((value: Awaited<ReturnType<typeof commands.resolveMangadex>>) => void)
       | null = null
     mocks.resolveMangadex.mockImplementationOnce(
-      () => new Promise((resolve) => { resolveReplacement = resolve }),
+      () =>
+        new Promise((resolve) => {
+          resolveReplacement = resolve
+        }),
     )
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'MangaDex URL' }), {
       target: { value: 'https://mangadex.org/title/87654321-1234-1234-1234-123456789abc' },
@@ -223,20 +233,24 @@ describe('StartView', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Choose destination' }))
     await screen.findByDisplayValue('/Users/example/Downloads')
     let emit: ((event: MangaDexEvent) => void) | null = null
-    mocks.startMangadexImport.mockImplementation(async (_name, _url, _language, _output, channel) => {
-      emit = channel.onmessage
-      return 'import-1'
-    })
+    mocks.startMangadexImport.mockImplementation(
+      async (_name, _url, _language, _output, channel) => {
+        emit = channel.onmessage
+        return 'import-1'
+      },
+    )
     mocks.cancelMangadexImport.mockResolvedValue(null)
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Import chapters' }))
-    await waitFor(() => expect(mocks.startMangadexImport).toHaveBeenCalledWith(
-      'Blue Period',
-      url,
-      'en',
-      '/Users/example/Downloads',
-      expect.anything(),
-    ))
+    await waitFor(() =>
+      expect(mocks.startMangadexImport).toHaveBeenCalledWith(
+        'Blue Period',
+        url,
+        'en',
+        '/Users/example/Downloads',
+        expect.anything(),
+      ),
+    )
     emit?.({ job_id: 'import-1', state: 'downloading', error: null })
     expect(await within(dialog).findByText('Downloading chapters…')).toBeInTheDocument()
 
