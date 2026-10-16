@@ -6,6 +6,7 @@ mod source;
 mod store;
 
 pub mod download;
+pub mod mangadex;
 
 pub use device::{Backend, Device, DeviceType};
 pub use hardware::Hardware;
