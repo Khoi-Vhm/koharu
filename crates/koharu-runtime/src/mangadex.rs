@@ -1,12 +1,17 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs::File,
+    io::{Read, Result as IoResult},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, ensure};
+use sha2::{Digest, Sha256};
 
 use crate::{Store, download, source::extract};
 
 const PYTHON_RELEASE: &str = "3.12.7+20241016";
 const DOWNLOADER_RELEASE: &str = "3.1.4";
-const DOWNLOADER_WHEEL: &str = "https://files.pythonhosted.org/packages/py3/m/mangadex-downloader/mangadex_downloader-3.1.4-py3-none-any.whl";
+const DOWNLOADER_WHEEL: &str = "https://files.pythonhosted.org/packages/65/2a/3ecb3edf72d0f46a0ef0fc9f7b3383c30fea73055e3c474f28311c2a6b39/mangadex_downloader-3.1.4-py3-none-any.whl";
 const DOWNLOADER_SHA256: &str = "66d7587cb12358d1f8555bab28f569d8bf0c895a0659c8e203af8ac1313b0982";
 
 pub struct MangaDexDownloader { python: PathBuf }
@@ -64,16 +69,39 @@ impl Platform {
         let artifact = self.artifact();
         let archive = tempfile::Builder::new().suffix(".tar.gz").tempfile()?;
         download::fetch(artifact.url, archive.path()).await?;
-        ensure!(!artifact.sha256.is_empty() && !DOWNLOADER_SHA256.is_empty(), "missing runtime checksum");
+        validate_sha256(archive.path(), artifact.sha256)?;
         extract(archive.path(), stage, &["python/**"])?;
         let wheel = tempfile::Builder::new().suffix(".whl").tempfile()?;
         download::fetch(DOWNLOADER_WHEEL, wheel.path()).await?;
+        validate_sha256(wheel.path(), DOWNLOADER_SHA256)?;
         let status = tokio::process::Command::new(stage.join(self.python_path()))
             .args(["-m", "pip", "install", "--disable-pip-version-check", "--no-input", "--target"])
             .arg(stage.join("python/lib/python3.12/site-packages")).arg(wheel.path()).status().await
             .context("failed to run managed Python pip")?;
         ensure!(status.success(), "managed Python failed to install MangaDex Downloader");
         Ok(())
+    }
+}
+
+fn validate_sha256(path: &Path, expected: &str) -> Result<()> {
+    let mut file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    copy_to_hasher(&mut file, &mut hasher)
+        .with_context(|| format!("failed to hash {}", path.display()))?;
+    ensure!(
+        format!("{:x}", hasher.finalize()) == expected,
+        "SHA-256 mismatch for {}",
+        path.display()
+    );
+    Ok(())
+}
+
+fn copy_to_hasher(reader: &mut impl Read, hasher: &mut Sha256) -> IoResult<()> {
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 { return Ok(()); }
+        hasher.update(&buffer[..count]);
     }
 }
 
@@ -84,5 +112,7 @@ mod tests {
     #[test] fn selects_an_artifact_for_every_shipping_target() { for target in [Platform::MacosArm64, Platform::WindowsX64, Platform::LinuxX64, Platform::LinuxArm64] { let artifact = target.artifact(); assert!(artifact.url.starts_with("https://")); assert_eq!(artifact.sha256.len(), 64); } }
     #[test] fn accepts_only_complete_runtime_caches() { let root = tempfile::tempdir().unwrap(); let target = Platform::LinuxX64; assert!(!target.complete(root.path())); for path in target.required_files() { let path = root.path().join(path); std::fs::create_dir_all(path.parent().unwrap()).unwrap(); std::fs::write(path, b"ready").unwrap(); } assert!(target.complete(root.path())); }
     #[test] fn rejects_an_incomplete_runtime_cache() { let root = tempfile::tempdir().unwrap(); let target = Platform::WindowsX64; let python = root.path().join(target.python_path()); std::fs::create_dir_all(python.parent().unwrap()).unwrap(); std::fs::write(python, b"ready").unwrap(); assert!(!target.complete(root.path())); }
+    #[test] fn accepts_a_matching_python_archive_hash() { let file = tempfile::NamedTempFile::new().unwrap(); std::fs::write(file.path(), b"hello").unwrap(); super::validate_sha256(file.path(), "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824").unwrap(); }
+    #[test] fn rejects_a_tampered_downloader_wheel() { let file = tempfile::NamedTempFile::new().unwrap(); std::fs::write(file.path(), b"tampered").unwrap(); assert!(super::validate_sha256(file.path(), "66d7587cb12358d1f8555bab28f569d8bf0c895a0659c8e203af8ac1313b0982").is_err()); }
     #[test] fn builds_a_raw_image_command_with_absolute_output() { let root = tempfile::tempdir().unwrap(); let downloader = MangaDexDownloader::for_test(root.path().join("python")); let command = downloader.command("https://mangadex.org/title/abc", "ja", Path::new("downloads")); let actual = command.get_args().map(|value| value.to_string_lossy().into_owned()).collect::<Vec<_>>(); assert_eq!(actual, vec!["-m", "mangadex_downloader", "https://mangadex.org/title/abc", "--language", "ja", "--save-as", "raw", "--path", &std::env::current_dir().unwrap().join("downloads").display().to_string()]); }
 }
