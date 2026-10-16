@@ -1,13 +1,60 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    ffi::OsStr,
+    path::{Path, PathBuf},
+    process::Stdio,
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, bail, ensure};
-use koharu_runtime::http_client;
+use koharu_runtime::{MangaDexDownloader, http_client};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use specta::Type;
+use tauri::{AppHandle, Manager as _, ipc::Channel};
+use tauri_runtime_cef::CefRuntime;
+use tokio::{io::AsyncReadExt as _, process::Child, sync::watch, time::Duration};
 use url::Url;
+use walkdir::WalkDir;
+
+use super::{
+    Error,
+    import,
+    lifecycle::{self, CanvasChannel},
+    project::{CurrentProject, ProjectLibrary},
+};
 
 const API: &str = "https://api.mangadex.org";
 const CHAPTER_PAGE_SIZE: usize = 100;
+
+#[derive(Clone, Debug, Serialize, Type)]
+pub struct MangaDexImportEvent {
+    pub job_id: String,
+    pub state: MangaDexImportState,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum MangaDexImportState {
+    RuntimeSetup,
+    Downloading,
+    Importing,
+    Finished,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Default)]
+pub(crate) struct MangaDexImports {
+    jobs: Mutex<HashMap<String, MangaDexImportControl>>,
+}
+
+#[derive(Clone)]
+struct MangaDexImportControl {
+    cancelled: watch::Sender<bool>,
+    child: Arc<tokio::sync::Mutex<Option<Child>>>,
+}
 
 #[derive(Clone, Debug, Serialize, Type)]
 pub struct MangaDexMetadata {
@@ -35,6 +82,389 @@ pub(crate) async fn resolve_manga(url: &str) -> Result<MangaDexMetadata> {
 
 pub(crate) async fn chapter_manifest(manga_id: &str, language: &str) -> Result<Vec<ChapterManifest>> {
     chapter_manifest_at(manga_id, language, API).await
+}
+
+pub(crate) async fn start_mangadex_import(
+    name: String,
+    url: String,
+    language: String,
+    output: String,
+    on_event: Channel<MangaDexImportEvent>,
+    handle: AppHandle<CefRuntime>,
+) -> std::result::Result<String, Error> {
+    let output = PathBuf::from(output);
+    let manga_id = validate_import_request(&name, &url, &language, &output)?;
+
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let (cancelled, receiver) = watch::channel(false);
+    let control = MangaDexImportControl {
+        cancelled,
+        child: Arc::new(tokio::sync::Mutex::new(None)),
+    };
+    handle
+        .state::<MangaDexImports>()
+        .jobs
+        .lock()
+        .insert(job_id.clone(), control.clone());
+    publish(&on_event, &job_id, MangaDexImportState::RuntimeSetup);
+
+    let task_handle = handle.clone();
+    let task_job_id = job_id.clone();
+    drop(tokio::spawn(async move {
+        let mut receiver = receiver;
+        let result = run_mangadex_import(
+            &task_handle,
+            &control,
+            &mut receiver,
+            &name,
+            &url,
+            &manga_id,
+            &language,
+            &output,
+            &on_event,
+            &task_job_id,
+        )
+        .await;
+        let event = match result {
+            Ok(()) => MangaDexImportEvent {
+                job_id: task_job_id.clone(),
+                state: MangaDexImportState::Finished,
+                error: None,
+            },
+            Err(error) if *receiver.borrow() => MangaDexImportEvent {
+                job_id: task_job_id.clone(),
+                state: MangaDexImportState::Cancelled,
+                error: None,
+            },
+            Err(error) => MangaDexImportEvent {
+                job_id: task_job_id.clone(),
+                state: MangaDexImportState::Failed,
+                error: Some(format!("{error:#}")),
+            },
+        };
+        let _ = on_event.send(event);
+        task_handle
+            .state::<MangaDexImports>()
+            .jobs
+            .lock()
+            .remove(&task_job_id);
+    }));
+    Ok(job_id)
+}
+
+fn validate_import_request(name: &str, url: &str, language: &str, output: &Path) -> Result<String> {
+    ensure!(!name.trim().is_empty(), "project name cannot be empty");
+    let manga_id = manga_id(url)?;
+    ensure!(!language.trim().is_empty(), "MangaDex language cannot be empty");
+    ensure!(output.is_absolute(), "MangaDex output folder must be absolute");
+    ensure!(output.is_dir(), "MangaDex output folder does not exist");
+    Ok(manga_id)
+}
+
+pub(crate) async fn cancel_mangadex_import(
+    job_id: String,
+    handle: AppHandle<CefRuntime>,
+) -> std::result::Result<(), Error> {
+    let control = handle
+        .state::<MangaDexImports>()
+        .jobs
+        .lock()
+        .get(&job_id)
+        .cloned()
+        .context("MangaDex import job does not exist")?;
+    control.cancelled.send_replace(true);
+    if let Some(child) = control.child.lock().await.as_mut() {
+        let _ = child.start_kill();
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_mangadex_import(
+    handle: &AppHandle<CefRuntime>,
+    control: &MangaDexImportControl,
+    cancelled: &mut watch::Receiver<bool>,
+    name: &str,
+    url: &str,
+    manga_id: &str,
+    language: &str,
+    output: &Path,
+    on_event: &Channel<MangaDexImportEvent>,
+    job_id: &str,
+) -> Result<()> {
+    let manifest = cancelable(cancelled, chapter_manifest(manga_id, language)).await?;
+    ensure!(!manifest.is_empty(), "MangaDex has no chapters for the selected language");
+    open_or_create_project(handle, name).await?;
+
+    let downloader = cancelable(cancelled, MangaDexDownloader::prepare()).await?;
+    let download = prepare_download_folder(output, manga_id)?;
+
+    publish(on_event, job_id, MangaDexImportState::Downloading);
+    run_downloader(&downloader, url, language, &download, control, cancelled).await?;
+    rename_downloaded_pages(&download, &manifest)?;
+
+    publish(on_event, job_id, MangaDexImportState::Importing);
+    let download = download.clone();
+    let pages = cancelable(cancelled, async move {
+        tokio_rayon::spawn(move || import::import_folder(&download))
+            .await
+            .context("MangaDex page import task failed")?
+    })
+    .await?;
+    ensure!(!pages.is_empty(), "MangaDex downloader did not produce supported images");
+    lifecycle::import_pages(
+        handle.state::<koharu_desktop::Desktop>().inner(),
+        handle.state::<CurrentProject>().inner(),
+        handle.state::<CanvasChannel>().inner(),
+        pages,
+    )
+    .await
+}
+
+async fn open_or_create_project(handle: &AppHandle<CefRuntime>, name: &str) -> Result<()> {
+    let library = handle.state::<ProjectLibrary>().inner().clone();
+    let opened = if library.list()?.iter().any(|project| project.name == name) {
+        library.open(name).await?
+    } else {
+        library.create(name).await?
+    };
+    lifecycle::replace_project(handle, opened).await
+}
+
+fn publish(channel: &Channel<MangaDexImportEvent>, job_id: &str, state: MangaDexImportState) {
+    let _ = channel.send(MangaDexImportEvent {
+        job_id: job_id.to_owned(),
+        state,
+        error: None,
+    });
+}
+
+async fn cancelable<T>(
+    cancelled: &mut watch::Receiver<bool>,
+    operation: impl std::future::Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::select! {
+        result = operation => result,
+        () = wait_for_cancel(cancelled) => bail!("MangaDex import cancelled"),
+    }
+}
+
+async fn wait_for_cancel(cancelled: &mut watch::Receiver<bool>) {
+    while !*cancelled.borrow_and_update() {
+        if cancelled.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+async fn run_downloader(
+    downloader: &MangaDexDownloader,
+    url: &str,
+    language: &str,
+    output: &Path,
+    control: &MangaDexImportControl,
+    cancelled: &mut watch::Receiver<bool>,
+) -> Result<()> {
+    let mut command = downloader.command(url, language, output);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .context("failed to start MangaDex Downloader")?;
+    let stdout = child.stdout.take().context("MangaDex Downloader stdout is unavailable")?;
+    let stderr = child.stderr.take().context("MangaDex Downloader stderr is unavailable")?;
+    let stdout = tokio::spawn(async move {
+        let mut output = Vec::new();
+        let mut stdout = stdout;
+        stdout.read_to_end(&mut output).await?;
+        Ok::<_, std::io::Error>(output)
+    });
+    let stderr = tokio::spawn(async move {
+        let mut output = Vec::new();
+        let mut stderr = stderr;
+        stderr.read_to_end(&mut output).await?;
+        Ok::<_, std::io::Error>(output)
+    });
+    *control.child.lock().await = Some(child);
+
+    let status = loop {
+        if *cancelled.borrow_and_update() {
+            if let Some(child) = control.child.lock().await.as_mut() {
+                let _ = child.start_kill();
+            }
+        }
+        let status = control
+            .child
+            .lock()
+            .await
+            .as_mut()
+            .context("MangaDex Downloader process is unavailable")?
+            .try_wait()
+            .context("failed to wait for MangaDex Downloader")?;
+        if let Some(status) = status {
+            break status;
+        }
+        tokio::select! {
+            () = wait_for_cancel(cancelled) => {},
+            () = tokio::time::sleep(Duration::from_millis(50)) => {},
+        }
+    };
+    control.child.lock().await.take();
+    let stdout = stdout.await.context("MangaDex Downloader stdout task failed")??;
+    let stderr = stderr.await.context("MangaDex Downloader stderr task failed")??;
+    if *cancelled.borrow() {
+        bail!("MangaDex import cancelled");
+    }
+    ensure!(
+        status.success(),
+        "MangaDex Downloader exited with {status}: {}",
+        process_output(&stderr, &stdout)
+    );
+    Ok(())
+}
+
+fn process_output(stderr: &[u8], stdout: &[u8]) -> String {
+    let output = if stderr.is_empty() { stdout } else { stderr };
+    String::from_utf8_lossy(output).trim().to_owned()
+}
+
+fn prepare_download_folder(output: &Path, manga_id: &str) -> Result<PathBuf> {
+    ensure!(output.is_dir(), "MangaDex output folder does not exist");
+    let folder = output.join(format!("mangadex-{manga_id}"));
+    ensure!(
+        !folder.exists(),
+        "MangaDex output folder {} already exists",
+        folder.display()
+    );
+    std::fs::create_dir(&folder)
+        .with_context(|| format!("failed to create MangaDex output folder {}", folder.display()))?;
+    Ok(folder)
+}
+
+fn rename_downloaded_pages(download: &Path, manifest: &[ChapterManifest]) -> Result<()> {
+    let directories = WalkDir::new(download)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_type().is_dir() => Some(Ok(entry.into_path())),
+            Ok(_) => None,
+            Err(error) => Some(Err(error.into())),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut owned = HashSet::new();
+    let mut renames = Vec::new();
+    for chapter in manifest {
+        let folders = directories
+            .iter()
+            .filter(|folder| {
+                folder
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|name| name.contains(&chapter.id))
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            folders.len() == 1,
+            "could not uniquely associate downloaded files with MangaDex chapter {}",
+            chapter.id
+        );
+        let folder = folders[0];
+        let mut pages = WalkDir::new(folder)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|entry| match entry {
+                Ok(entry) if entry.file_type().is_file() && is_supported_image(entry.path()) => {
+                    Some(Ok(entry.into_path()))
+                }
+                Ok(_) => None,
+                Err(error) => Some(Err(error.into())),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        alphanumeric_sort::sort_slice_by_os_str_key(&mut pages, |path| {
+            path.file_name().unwrap_or_else(|| path.as_os_str())
+        });
+        ensure!(
+            pages.len() == chapter.page_count as usize,
+            "MangaDex chapter {} has {} downloaded pages, expected {}",
+            chapter.id,
+            pages.len(),
+            chapter.page_count
+        );
+        for (index, source) in pages.into_iter().enumerate() {
+            owned.insert(source.clone());
+            let extension = source
+                .extension()
+                .context("downloaded image has no extension")?;
+            let target = source.with_file_name(format!(
+                "chapter {} page {}.{}",
+                chapter.number,
+                index + 1,
+                extension.to_string_lossy()
+            ));
+            ensure!(
+                !target.exists() || target == source,
+                "refusing to overwrite downloaded page {}",
+                target.display()
+            );
+            renames.push((source, target));
+        }
+    }
+    for entry in WalkDir::new(download).follow_links(false) {
+        let entry = entry?;
+        if entry.file_type().is_file() && is_supported_image(entry.path()) {
+            ensure!(
+                owned.contains(entry.path()),
+                "refusing to rename unrelated downloaded file {}",
+                entry.path().display()
+            );
+        }
+    }
+    let mut staged = Vec::new();
+    for (index, (source, target)) in renames.into_iter().enumerate() {
+        if source == target {
+            continue;
+        }
+        let temporary = source.with_file_name(format!(".koharu-mangadex-{index}-{}", uuid::Uuid::new_v4()));
+        if temporary.exists() {
+            rollback_renames(&staged, 0);
+            bail!("refusing to overwrite temporary downloaded page {}", temporary.display());
+        }
+        if let Err(error) = std::fs::rename(&source, &temporary) {
+            rollback_renames(&staged, 0);
+            return Err(error).with_context(|| {
+                format!("failed to stage downloaded page {} for renaming", source.display())
+            });
+        }
+        staged.push((source, temporary, target));
+    }
+    for index in 0..staged.len() {
+        let (source, temporary, target) = &staged[index];
+        if let Err(error) = std::fs::rename(temporary, target) {
+            rollback_renames(&staged, index);
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to rename downloaded page {} to {}",
+                    source.display(),
+                    target.display()
+                )
+            });
+        }
+    }
+    Ok(())
+}
+
+fn rollback_renames(staged: &[(PathBuf, PathBuf, PathBuf)], completed: usize) {
+    for (source, _, target) in staged[..completed].iter().rev() {
+        let _ = std::fs::rename(target, source);
+    }
+    for (source, temporary, _) in staged[completed..].iter().rev() {
+        let _ = std::fs::rename(temporary, source);
+    }
+}
+
+fn is_supported_image(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
 }
 
 fn manga_id(url: &str) -> Result<String> {
@@ -228,6 +658,7 @@ struct ChapterAttributes {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::sync::Arc;
 
     use tokio::{
@@ -237,9 +668,106 @@ mod tests {
         task::JoinHandle,
     };
 
-    use super::{chapter_manifest_at, manga_id, resolve_manga_at};
+    use super::{
+        ChapterManifest, cancelable, chapter_manifest_at, manga_id, prepare_download_folder,
+        rename_downloaded_pages, resolve_manga_at,
+    };
 
     const MANGA_ID: &str = "b3f7d2b9-23f5-4b31-a042-40b7943c3983";
+
+    #[test]
+    fn renames_manifest_pages_per_chapter_without_changing_extensions() {
+        let directory = tempfile::tempdir().expect("create output directory");
+        let first = directory.path().join("chapter first-id");
+        let second = directory.path().join("chapter second-id");
+        fs::create_dir(&first).expect("create first chapter");
+        fs::create_dir(&second).expect("create second chapter");
+        fs::write(first.join("z.webp"), b"page").expect("write page");
+        fs::write(first.join("a.PNG"), b"page").expect("write page");
+        fs::write(second.join("page.jpg"), b"page").expect("write page");
+
+        rename_downloaded_pages(
+            directory.path(),
+            &[
+                ChapterManifest {
+                    id: "first-id".to_owned(),
+                    number: "1".to_owned(),
+                    page_count: 2,
+                },
+                ChapterManifest {
+                    id: "second-id".to_owned(),
+                    number: "1".to_owned(),
+                    page_count: 1,
+                },
+            ],
+        )
+        .expect("rename pages");
+
+        assert!(first.join("chapter 1 page 1.PNG").is_file());
+        assert!(first.join("chapter 1 page 2.webp").is_file());
+        assert!(second.join("chapter 1 page 1.jpg").is_file());
+    }
+
+    #[test]
+    fn refuses_to_rename_files_not_owned_by_the_manifest() {
+        let directory = tempfile::tempdir().expect("create output directory");
+        let chapter = directory.path().join("chapter chapter-id");
+        fs::create_dir(&chapter).expect("create chapter");
+        let unrelated = directory.path().join("unrelated.png");
+        fs::write(&unrelated, b"page").expect("write unrelated page");
+        fs::write(chapter.join("page.png"), b"page").expect("write chapter page");
+
+        let error = rename_downloaded_pages(
+            directory.path(),
+            &[ChapterManifest {
+                id: "chapter-id".to_owned(),
+                number: "1".to_owned(),
+                page_count: 1,
+            }],
+        )
+        .expect_err("unrelated file must be refused");
+
+        assert!(error.to_string().contains("unrelated"));
+        assert!(unrelated.is_file());
+        assert!(chapter.join("page.png").is_file());
+    }
+
+    #[test]
+    fn refuses_an_existing_manga_output_folder() {
+        let output = tempfile::tempdir().expect("create output directory");
+        let existing = output.path().join("mangadex-manga-id");
+        fs::create_dir(&existing).expect("create existing download directory");
+
+        let error = prepare_download_folder(output.path(), "manga-id")
+            .expect_err("must not overwrite a previous download");
+
+        assert!(error.to_string().contains("already exists"));
+        assert!(existing.is_dir());
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_runtime_setup_before_import() {
+        let (sender, mut cancelled) = tokio::sync::watch::channel(false);
+        sender.send_replace(true);
+
+        let error = cancelable(&mut cancelled, std::future::pending::<anyhow::Result<()>>())
+            .await
+            .expect_err("cancelled setup must not continue");
+
+        assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_download_before_import() {
+        let (sender, mut cancelled) = tokio::sync::watch::channel(false);
+        sender.send_replace(true);
+
+        let error = cancelable(&mut cancelled, std::future::pending::<anyhow::Result<()>>())
+            .await
+            .expect_err("cancelled download must not continue to import");
+
+        assert!(error.to_string().contains("cancelled"));
+    }
 
     #[test]
     fn accepts_mangadex_title_urls() {

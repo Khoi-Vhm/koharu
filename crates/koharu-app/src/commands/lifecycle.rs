@@ -7,7 +7,6 @@ use specta::Type;
 use strum::{EnumMessage as _, IntoEnumIterator as _};
 use tauri::{AppHandle, Manager as _, State, WebviewWindow, ipc::Channel};
 use tauri_runtime_cef::CefRuntime;
-use walkdir::WalkDir;
 
 use super::{
     ChannelExt as _, Error,
@@ -180,7 +179,7 @@ pub(crate) async fn subscribe(
     })
 }
 
-async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Project) -> Result<()> {
+pub(crate) async fn replace_project(handle: &AppHandle<CefRuntime>, opened: Project) -> Result<()> {
     let snapshot = opened.snapshot();
     let page = opened.active_page();
     let info = opened.info();
@@ -351,41 +350,36 @@ pub(crate) async fn import(
     let dialog = rfd::AsyncFileDialog::new()
         .add_filter("Images, archives, and PDF", &extensions)
         .set_parent(&window);
-    let files = match source {
+    let pages = match source {
         PageImportSource::Files => dialog.pick_files().await.map(|files| {
-            files
+            let files = files
                 .into_iter()
                 .map(|file| file.path().to_owned())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            tokio_rayon::spawn(move || import::import(files))
         }),
         PageImportSource::Folder => dialog.pick_folder().await.map(|folder| {
-            WalkDir::new(folder.path())
-                .follow_links(false)
-                .into_iter()
-                .filter_map(|entry| match entry {
-                    Ok(entry) if entry.file_type().is_file() => Some(entry.into_path()),
-                    Ok(_) => None,
-                    Err(error) => {
-                        tracing::warn!(%error, "could not inspect an import directory entry");
-                        None
-                    }
-                })
-                .filter(|path| {
-                    path.extension()
-                        .and_then(|extension| extension.to_str())
-                        .is_some_and(|extension| extension.parse::<import::Format>().is_ok())
-                })
-                .collect::<Vec<_>>()
+            let folder = folder.path().to_owned();
+            tokio_rayon::spawn(move || import::import_folder(&folder))
         }),
     };
-    let Some(files) = files else {
+    let Some(pages) = pages else {
         return Ok(());
     };
-    if files.is_empty() {
+    let pages = pages.await?;
+    if pages.is_empty() {
         return Err(anyhow::anyhow!("no supported images were found in the selection").into());
     }
-    let pages = tokio_rayon::spawn(move || import::import(files)).await?;
+    import_pages(&desktop, &project, &canvas_channel, pages).await?;
+    Ok(())
+}
 
+pub(crate) async fn import_pages(
+    desktop: &Desktop,
+    project: &CurrentProject,
+    canvas_channel: &CanvasChannel,
+    pages: Vec<import::Page>,
+) -> Result<()> {
     let (commit, page) = {
         let mut project = project.project.lock().await;
         let project = project.as_mut().context("no project is open")?;
