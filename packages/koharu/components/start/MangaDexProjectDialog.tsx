@@ -6,7 +6,7 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
-import { commands } from '@koharu/bridge/protocol'
+import { mangaDexCommands, type MangaDexImportEvent } from '@/lib/mangadex'
 import { Alert, AlertDescription, AlertTitle } from '@koharu/ui/components/alert'
 import { Button } from '@koharu/ui/components/button'
 import {
@@ -25,33 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@koharu/ui/components/select'
-
-type MangaDexLanguage = { code: string; name: string }
-
-type MangaDexImportEvent = {
-  job_id: string
-  state: 'runtime_setup' | 'downloading' | 'importing' | 'finished' | 'failed' | 'cancelled'
-  error: string | null
-}
-
-type MangaDexCommands = {
-  resolveMangadex: (url: string) => Promise<{
-    manga_id: string
-    title: string
-    languages: MangaDexLanguage[]
-  }>
-  pickMangadexOutputFolder: () => Promise<string | null>
-  startMangadexImport: (
-    name: string,
-    url: string,
-    language: string,
-    output: string,
-    onEvent: Channel<MangaDexImportEvent>,
-  ) => Promise<string>
-  cancelMangadexImport: (jobId: string) => Promise<null>
-}
-
-const mangadex = commands as typeof commands & MangaDexCommands
 
 const activeStates = new Set(['runtime_setup', 'downloading', 'importing', 'cancelling'])
 
@@ -96,7 +69,7 @@ export function MangaDexProjectDialog({
     setLanguages([])
     setLanguage(null)
     try {
-      const metadata = await call(mangadex.resolveMangadex, mangaUrl)
+      const metadata = await call(mangaDexCommands.resolve, mangaUrl)
       if (generation !== resolveGeneration.current) return
       setName(metadata.title)
       setLanguages(metadata.languages)
@@ -116,7 +89,7 @@ export function MangaDexProjectDialog({
     setError(null)
     setDestinationCancelled(false)
     try {
-      const selected = await call(mangadex.pickMangadexOutputFolder)
+      const selected = await call(mangaDexCommands.pickOutputFolder)
       if (selected) setOutput(selected)
       else setDestinationCancelled(true)
     } catch (error) {
@@ -138,7 +111,7 @@ export function MangaDexProjectDialog({
     }
     try {
       const started = await call(
-        mangadex.startMangadexImport,
+        mangaDexCommands.startImport,
         name.trim(),
         url.trim(),
         language,
@@ -157,7 +130,7 @@ export function MangaDexProjectDialog({
     setError(null)
     setStatus('cancelling')
     try {
-      await call(mangadex.cancelMangadexImport, jobId)
+      await call(mangaDexCommands.cancelImport, jobId)
     } catch (error) {
       setStatus('failed')
       setError(errorMessage(error))

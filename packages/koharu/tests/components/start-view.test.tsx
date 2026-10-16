@@ -3,33 +3,11 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { StartView } from '@/components/start/StartView'
+import { mangaDexCommands, type MangaDexImportEvent } from '@/lib/mangadex'
 import { queryClient, useProject } from '@/lib/queries'
 import { commands } from '@koharu/bridge/protocol'
 
-type MangaDexEvent = {
-  job_id: string
-  state: 'runtime_setup' | 'downloading' | 'importing' | 'finished' | 'failed' | 'cancelled'
-  error: string | null
-}
-
-type MangaDexCommands = {
-  resolveMangadex: (url: string) => Promise<{
-    manga_id: string
-    title: string
-    languages: Array<{ code: string; name: string }>
-  }>
-  pickMangadexOutputFolder: () => Promise<string | null>
-  startMangadexImport: (
-    name: string,
-    url: string,
-    language: string,
-    output: string,
-    onEvent: { onmessage: ((event: MangaDexEvent) => void) | null },
-  ) => Promise<string>
-  cancelMangadexImport: (jobId: string) => Promise<null>
-}
-
-const mangadex = commands as typeof commands & MangaDexCommands
+type MangaDexEvent = MangaDexImportEvent
 
 function ProjectFlow() {
   const project = useProject().data
@@ -47,24 +25,14 @@ function renderProjectFlow() {
 describe('StartView', () => {
   afterEach(() => {
     vi.restoreAllMocks()
-    delete (mangadex as Partial<MangaDexCommands>).resolveMangadex
-    delete (mangadex as Partial<MangaDexCommands>).pickMangadexOutputFolder
-    delete (mangadex as Partial<MangaDexCommands>).startMangadexImport
-    delete (mangadex as Partial<MangaDexCommands>).cancelMangadexImport
   })
 
   function setupMangaDex() {
     vi.spyOn(commands, 'listProjects').mockResolvedValue([])
-    const resolveMangadex = vi.fn<MangaDexCommands['resolveMangadex']>()
-    const pickMangadexOutputFolder = vi.fn<MangaDexCommands['pickMangadexOutputFolder']>()
-    const startMangadexImport = vi.fn<MangaDexCommands['startMangadexImport']>()
-    const cancelMangadexImport = vi.fn<MangaDexCommands['cancelMangadexImport']>()
-    Object.assign(mangadex, {
-      resolveMangadex,
-      pickMangadexOutputFolder,
-      startMangadexImport,
-      cancelMangadexImport,
-    })
+    const resolveMangadex = vi.spyOn(mangaDexCommands, 'resolve')
+    const pickMangadexOutputFolder = vi.spyOn(mangaDexCommands, 'pickOutputFolder')
+    const startMangadexImport = vi.spyOn(mangaDexCommands, 'startImport')
+    const cancelMangadexImport = vi.spyOn(mangaDexCommands, 'cancelImport')
     return { resolveMangadex, pickMangadexOutputFolder, startMangadexImport, cancelMangadexImport }
   }
 
@@ -227,7 +195,7 @@ describe('StartView', () => {
     await waitFor(() => expect(start).toBeEnabled())
 
     let resolveReplacement:
-      | ((value: Awaited<ReturnType<MangaDexCommands['resolveMangadex']>>) => void)
+      | ((value: Awaited<ReturnType<typeof mangaDexCommands.resolve>>) => void)
       | null = null
     mocks.resolveMangadex.mockImplementationOnce(
       () => new Promise((resolve) => { resolveReplacement = resolve }),
