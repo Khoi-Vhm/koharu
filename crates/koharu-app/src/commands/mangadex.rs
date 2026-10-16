@@ -125,29 +125,32 @@ pub(crate) async fn start_mangadex_import(
             &task_job_id,
         )
         .await;
-        let event = match result {
-            Ok(()) => MangaDexImportEvent {
-                job_id: task_job_id.clone(),
-                state: MangaDexImportState::Finished,
-                error: None,
-            },
-            Err(error) if *receiver.borrow() => MangaDexImportEvent {
+        let cancelled = {
+            let imports = task_handle
+                .state::<MangaDexImports>();
+            let mut jobs = imports.jobs.lock();
+            let cancelled = *receiver.borrow();
+            jobs.remove(&task_job_id);
+            cancelled
+        };
+        let event = match (result, cancelled) {
+            (_, true) => MangaDexImportEvent {
                 job_id: task_job_id.clone(),
                 state: MangaDexImportState::Cancelled,
                 error: None,
             },
-            Err(error) => MangaDexImportEvent {
+            (Ok(()), false) => MangaDexImportEvent {
+                job_id: task_job_id.clone(),
+                state: MangaDexImportState::Finished,
+                error: None,
+            },
+            (Err(error), false) => MangaDexImportEvent {
                 job_id: task_job_id.clone(),
                 state: MangaDexImportState::Failed,
                 error: Some(format!("{error:#}")),
             },
         };
         let _ = on_event.send(event);
-        task_handle
-            .state::<MangaDexImports>()
-            .jobs
-            .lock()
-            .remove(&task_job_id);
     }));
     Ok(job_id)
 }
@@ -165,14 +168,16 @@ pub(crate) async fn cancel_mangadex_import(
     job_id: String,
     handle: AppHandle<CefRuntime>,
 ) -> std::result::Result<(), Error> {
-    let control = handle
-        .state::<MangaDexImports>()
-        .jobs
-        .lock()
-        .get(&job_id)
-        .cloned()
-        .context("MangaDex import job does not exist")?;
-    control.cancelled.send_replace(true);
+    let control = {
+        let imports = handle.state::<MangaDexImports>();
+        let jobs = imports.jobs.lock();
+        let control = jobs
+            .get(&job_id)
+            .cloned()
+            .context("MangaDex import job does not exist")?;
+        control.cancelled.send_replace(true);
+        control
+    };
     if let Some(child) = control.child.lock().await.as_mut() {
         let _ = child.start_kill();
     }
@@ -212,6 +217,7 @@ async fn run_mangadex_import(
     })
     .await?;
     ensure!(!pages.is_empty(), "MangaDex downloader did not produce supported images");
+    ensure_not_cancelled(cancelled)?;
     lifecycle::import_pages(
         handle.state::<koharu_desktop::Desktop>().inner(),
         handle.state::<CurrentProject>().inner(),
@@ -219,6 +225,11 @@ async fn run_mangadex_import(
         pages,
     )
     .await
+}
+
+fn ensure_not_cancelled(cancelled: &watch::Receiver<bool>) -> Result<()> {
+    ensure!(!*cancelled.borrow(), "MangaDex import cancelled");
+    Ok(())
 }
 
 async fn open_or_create_project(handle: &AppHandle<CefRuntime>, name: &str) -> Result<()> {
@@ -669,8 +680,8 @@ mod tests {
     };
 
     use super::{
-        ChapterManifest, cancelable, chapter_manifest_at, manga_id, prepare_download_folder,
-        rename_downloaded_pages, resolve_manga_at,
+        ChapterManifest, cancelable, chapter_manifest_at, ensure_not_cancelled, manga_id,
+        prepare_download_folder, rename_downloaded_pages, resolve_manga_at,
     };
 
     const MANGA_ID: &str = "b3f7d2b9-23f5-4b31-a042-40b7943c3983";
@@ -767,6 +778,17 @@ mod tests {
             .expect_err("cancelled download must not continue to import");
 
         assert!(error.to_string().contains("cancelled"));
+    }
+
+    #[test]
+    fn cancellation_after_decoding_prevents_import_commit() {
+        let (sender, cancelled) = tokio::sync::watch::channel(false);
+        let decoded_pages = 1;
+        sender.send_replace(true);
+
+        let committed_pages = ensure_not_cancelled(&cancelled).map(|()| decoded_pages);
+
+        assert!(committed_pages.is_err());
     }
 
     #[test]

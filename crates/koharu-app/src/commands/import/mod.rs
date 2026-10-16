@@ -116,18 +116,19 @@ pub(crate) fn import_folder(path: &Path) -> Result<Vec<Page>> {
         .follow_links(false)
         .into_iter()
         .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_type().is_file() => Some(Ok(entry.into_path())),
+            Ok(entry) if entry.file_type().is_file() => Some(entry.into_path()),
             Ok(_) => None,
-            Err(error) => Some(Err(error.into())),
+            Err(error) => {
+                tracing::warn!(%error, "could not inspect an import directory entry");
+                None
+            }
         })
-        .filter(|entry: &Result<PathBuf>| {
-            entry.as_ref().is_err_or(|path| {
-                path.extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| extension.parse::<Format>().is_ok())
-            })
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.parse::<Format>().is_ok())
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     import(paths)
 }
 
@@ -185,5 +186,21 @@ mod tests {
             pages.iter().map(|page| page.name.as_str()).collect::<Vec<_>>(),
             ["page1.png", "page2.PNG"]
         );
+    }
+
+    #[test]
+    fn folder_import_skips_unreadable_walk_entries() {
+        let missing = std::env::temp_dir().join(format!(
+            "koharu-import-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+
+        let pages = import_folder(&missing).expect("skip unreadable traversal entry");
+
+        assert!(pages.is_empty());
     }
 }
