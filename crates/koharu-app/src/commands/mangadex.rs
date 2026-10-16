@@ -231,7 +231,7 @@ async fn run_mangadex_import(
 ) -> Result<()> {
     let manifest = cancelable(cancelled, chapter_manifest(manga_id, language)).await?;
     ensure!(!manifest.is_empty(), "MangaDex has no chapters for the selected language");
-    open_or_create_project(handle, name).await?;
+    create_and_open_project(handle, name).await?;
 
     let downloader = cancelable(cancelled, MangaDexDownloader::prepare()).await?;
     let download = prepare_download_folder(output, manga_id)?;
@@ -314,13 +314,9 @@ async fn finish_import_commit(control: &MangaDexImportControl) {
     *transition = ImportTransition::Completed;
 }
 
-async fn open_or_create_project(handle: &AppHandle<CefRuntime>, name: &str) -> Result<()> {
+async fn create_and_open_project(handle: &AppHandle<CefRuntime>, name: &str) -> Result<()> {
     let library = handle.state::<ProjectLibrary>().inner().clone();
-    let opened = if library.list()?.iter().any(|project| project.name == name) {
-        library.open(name).await?
-    } else {
-        library.create(name).await?
-    };
+    let opened = library.create(name).await?;
     lifecycle::replace_project(handle, opened).await
 }
 

@@ -2,7 +2,7 @@
 
 import { Channel } from '@tauri-apps/api/core'
 import { CircleStop, Download, FolderOpen, Search } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { call } from '@/lib/backend'
@@ -78,29 +78,36 @@ export function MangaDexProjectDialog({
   const [jobId, setJobId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [destinationCancelled, setDestinationCancelled] = useState(false)
+  const resolveGeneration = useRef(0)
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(null)
 
   const active = status !== null && activeStates.has(status)
   const canStart = Boolean(
-    name.trim() && url.trim() && language && output && !active && status !== 'resolving',
+    name.trim() && url.trim() && resolvedUrl === url.trim() && language && output && !active && status !== 'resolving',
   )
 
   async function resolve() {
     const mangaUrl = url.trim()
     if (!mangaUrl || active) return
+    const generation = ++resolveGeneration.current
     setError(null)
     setStatus('resolving')
+    setResolvedUrl(null)
     setLanguages([])
     setLanguage(null)
     try {
       const metadata = await call(mangadex.resolveMangadex, mangaUrl)
+      if (generation !== resolveGeneration.current) return
       setName(metadata.title)
       setLanguages(metadata.languages)
       setLanguage(metadata.languages[0]?.code ?? null)
+      setResolvedUrl(mangaUrl)
       if (metadata.languages.length === 0) setError(t('mangadex.noLanguages'))
     } catch (error) {
+      if (generation !== resolveGeneration.current) return
       setError(errorMessage(error))
     } finally {
-      setStatus(null)
+      if (generation === resolveGeneration.current) setStatus(null)
     }
   }
 
@@ -177,7 +184,15 @@ export function MangaDexProjectDialog({
               <Input
                 id='mangadex-url'
                 value={url}
-                onChange={(event) => setUrl(event.target.value)}
+                onChange={(event) => {
+                  resolveGeneration.current += 1
+                  setUrl(event.target.value)
+                  setResolvedUrl(null)
+                  setLanguages([])
+                  setLanguage(null)
+                  setStatus(null)
+                  setError(null)
+                }}
                 placeholder={t('mangadex.urlPlaceholder')}
                 disabled={active}
                 autoComplete='off'

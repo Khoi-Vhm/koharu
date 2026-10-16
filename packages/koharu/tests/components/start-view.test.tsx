@@ -203,6 +203,22 @@ describe('StartView', () => {
     await waitFor(() => expect(start).toBeEnabled())
   })
 
+  it('requires resolving the current URL before starting an import', async () => {
+    const { dialog, mocks } = await resolveManga()
+    mocks.pickMangadexOutputFolder.mockResolvedValue('/Users/example/Downloads')
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Choose destination' }))
+    const start = within(dialog).getByRole('button', { name: 'Import chapters' })
+    await waitFor(() => expect(start).toBeEnabled())
+
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'MangaDex URL' }), {
+      target: { value: 'https://mangadex.org/title/87654321-1234-1234-1234-123456789abc' },
+    })
+
+    expect(start).toBeDisabled()
+    fireEvent.click(start)
+    expect(mocks.startMangadexImport).not.toHaveBeenCalled()
+  })
+
   it('does not start stale metadata while resolving a replacement MangaDex URL', async () => {
     const { dialog, mocks } = await resolveManga()
     mocks.pickMangadexOutputFolder.mockResolvedValue('/Users/example/Downloads')
