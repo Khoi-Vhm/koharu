@@ -42,3 +42,9 @@ The requested review changes therefore require a larger replacement of the insta
 
 - Linux Pillow wheels are tagged `manylinux_2_28`; the Linux runtime therefore needs glibc 2.28 or newer. This is the available CPython 3.12 wheel selected by the platform resolver for Pillow 11.1.0.
 - No Rust compilation or focused test execution was possible in this environment, so the final code still needs the requested Cargo check in a Rust-enabled environment.
+
+## Compile-blocker fix round
+
+- Removed the duplicate `Platform::name(self)` definition while retaining the mapping for all four supported targets.
+- `git diff --check` passed, and a declaration scan found no other duplicate function definitions in `mangadex.rs`.
+- `cargo`, `rustc`, and `rustfmt` are unavailable, so compilation and Rust tests remain unverified.

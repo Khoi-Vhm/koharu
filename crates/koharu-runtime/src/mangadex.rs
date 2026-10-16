@@ -67,7 +67,6 @@ impl Platform {
         }
     }
     const fn python_path(self) -> &'static str { match self { Self::WindowsX64 => "python/python.exe", _ => "python/bin/python3" } }
-    const fn name(self) -> &'static str { match self { Self::MacosArm64 => "aarch64-apple-darwin", Self::WindowsX64 => "x86_64-pc-windows-msvc", Self::LinuxX64 => "x86_64-unknown-linux-gnu", Self::LinuxArm64 => "aarch64-unknown-linux-gnu" } }
     fn required_files(self) -> [&'static str; 4] { [self.python_path(), "python/LICENSE", "python/lib/python3.12/site-packages/mangadex_downloader/__main__.py", "python/lib/python3.12/site-packages/mangadex_downloader-3.1.4.dist-info/licenses/LICENSE"] }
     fn complete(self, root: &Path) -> bool {
         self.required_files().iter().all(|path| root.join(path).is_file())
