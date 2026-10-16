@@ -4,6 +4,7 @@ pub(crate) mod editing;
 pub(crate) mod fonts;
 pub(crate) mod import;
 pub(crate) mod lifecycle;
+pub(crate) mod mangadex;
 pub(crate) mod output;
 pub(crate) mod preferences;
 pub(crate) mod processing;
