@@ -149,7 +149,6 @@ pub(crate) async fn start_mangadex_import(
             &control,
             &mut receiver,
             &name,
-            &url,
             &manga_id,
             &language,
             &output,
@@ -224,7 +223,6 @@ async fn run_mangadex_import(
     control: &MangaDexImportControl,
     cancelled: &mut watch::Receiver<bool>,
     name: &str,
-    url: &str,
     manga_id: &str,
     language: &str,
     output: &Path,
@@ -239,8 +237,19 @@ async fn run_mangadex_import(
     let download = prepare_download_folder(output, manga_id)?;
 
     publish(on_event, job_id, MangaDexImportState::Downloading);
-    run_downloader(&downloader, url, language, &download, control, cancelled).await?;
-    rename_downloaded_pages(&download, &manifest)?;
+    for chapter in &manifest {
+        let chapter_download = prepare_chapter_download_folder(&download, &chapter.id)?;
+        run_downloader(
+            &downloader,
+            &chapter_url(&chapter.id),
+            language,
+            &chapter_download,
+            control,
+            cancelled,
+        )
+        .await?;
+        rename_downloaded_pages(&chapter_download, chapter)?;
+    }
 
     publish(on_event, job_id, MangaDexImportState::Importing);
     let download = download.clone();
@@ -338,6 +347,10 @@ async fn run_downloader(
     control: &MangaDexImportControl,
     cancelled: &mut watch::Receiver<bool>,
 ) -> Result<()> {
+    ensure!(
+        !*cancelled.borrow_and_update(),
+        "MangaDex import cancelled"
+    );
     let mut command = downloader.command(url, language, output);
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
@@ -413,83 +426,72 @@ fn prepare_download_folder(output: &Path, manga_id: &str) -> Result<PathBuf> {
     Ok(folder)
 }
 
-fn rename_downloaded_pages(download: &Path, manifest: &[ChapterManifest]) -> Result<()> {
-    let directories = WalkDir::new(download)
+fn prepare_chapter_download_folder(download: &Path, chapter_id: &str) -> Result<PathBuf> {
+    let id = Path::new(chapter_id);
+    ensure!(
+        id.file_name().is_some_and(|name| name == OsStr::new(chapter_id)),
+        "MangaDex chapter ID is not a path component"
+    );
+    let folder = download.join(id);
+    std::fs::create_dir(&folder).with_context(|| {
+        format!(
+            "failed to create MangaDex chapter download folder {}",
+            folder.display()
+        )
+    })?;
+    Ok(folder)
+}
+
+fn chapter_url(chapter_id: &str) -> String {
+    format!("https://mangadex.org/chapter/{chapter_id}")
+}
+
+fn rename_downloaded_pages(download: &Path, chapter: &ChapterManifest) -> Result<()> {
+    let mut covers = Vec::new();
+    let mut pages = WalkDir::new(download)
         .follow_links(false)
         .into_iter()
         .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_type().is_dir() => Some(Ok(entry.into_path())),
+            Ok(entry) if entry.file_type().is_file() && is_supported_image(entry.path()) => {
+                let path = entry.into_path();
+                if is_cover_image(&path) {
+                    covers.push(path);
+                    None
+                } else {
+                    Some(Ok(path))
+                }
+            }
             Ok(_) => None,
             Err(error) => Some(Err(error.into())),
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut owned = HashSet::new();
+    alphanumeric_sort::sort_slice_by_os_str_key(&mut pages, |path| {
+        path.file_name().unwrap_or_else(|| path.as_os_str())
+    });
+    ensure!(
+        pages.len() == chapter.page_count as usize,
+        "MangaDex chapter {} has {} downloaded pages, expected {}",
+        chapter.id,
+        pages.len(),
+        chapter.page_count
+    );
     let mut renames = Vec::new();
-    for chapter in manifest {
-        let folders = directories
-            .iter()
-            .filter(|folder| {
-                folder
-                    .file_name()
-                    .and_then(OsStr::to_str)
-                    .is_some_and(|name| name.contains(&chapter.id))
-            })
-            .collect::<Vec<_>>();
+    for (index, source) in pages.into_iter().enumerate() {
+        let extension = source
+            .extension()
+            .context("downloaded image has no extension")?;
+        let target = source.with_file_name(format!(
+            "chapter {} page {}.{}",
+            chapter.number,
+            index + 1,
+            extension.to_string_lossy()
+        ));
         ensure!(
-            folders.len() == 1,
-            "could not uniquely associate downloaded files with MangaDex chapter {}",
-            chapter.id
+            !target.exists() || target == source,
+            "refusing to overwrite downloaded page {}",
+            target.display()
         );
-        let folder = folders[0];
-        let mut pages = WalkDir::new(folder)
-            .follow_links(false)
-            .into_iter()
-            .filter_map(|entry| match entry {
-                Ok(entry) if entry.file_type().is_file() && is_supported_image(entry.path()) => {
-                    Some(Ok(entry.into_path()))
-                }
-                Ok(_) => None,
-                Err(error) => Some(Err(error.into())),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        alphanumeric_sort::sort_slice_by_os_str_key(&mut pages, |path| {
-            path.file_name().unwrap_or_else(|| path.as_os_str())
-        });
-        ensure!(
-            pages.len() == chapter.page_count as usize,
-            "MangaDex chapter {} has {} downloaded pages, expected {}",
-            chapter.id,
-            pages.len(),
-            chapter.page_count
-        );
-        for (index, source) in pages.into_iter().enumerate() {
-            owned.insert(source.clone());
-            let extension = source
-                .extension()
-                .context("downloaded image has no extension")?;
-            let target = source.with_file_name(format!(
-                "chapter {} page {}.{}",
-                chapter.number,
-                index + 1,
-                extension.to_string_lossy()
-            ));
-            ensure!(
-                !target.exists() || target == source,
-                "refusing to overwrite downloaded page {}",
-                target.display()
-            );
-            renames.push((source, target));
-        }
-    }
-    for entry in WalkDir::new(download).follow_links(false) {
-        let entry = entry?;
-        if entry.file_type().is_file() && is_supported_image(entry.path()) {
-            ensure!(
-                owned.contains(entry.path()),
-                "refusing to rename unrelated downloaded file {}",
-                entry.path().display()
-            );
-        }
+        renames.push((source, target));
     }
     let mut staged = Vec::new();
     for (index, (source, target)) in renames.into_iter().enumerate() {
@@ -522,6 +524,10 @@ fn rename_downloaded_pages(download: &Path, manifest: &[ChapterManifest]) -> Res
             });
         }
     }
+    for cover in covers {
+        std::fs::remove_file(&cover)
+            .with_context(|| format!("failed to remove MangaDex cover image {}", cover.display()))?;
+    }
     Ok(())
 }
 
@@ -538,6 +544,12 @@ fn is_supported_image(path: &Path) -> bool {
     path.extension()
         .and_then(OsStr::to_str)
         .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "webp"))
+}
+
+fn is_cover_image(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(OsStr::to_str)
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("cover"))
 }
 
 fn manga_id(url: &str) -> Result<String> {
@@ -744,67 +756,70 @@ mod tests {
     use super::{
         ChapterManifest, ImportTransition, MangaDexImportControl, begin_import_commit,
         MangaDexImportEvent, MangaDexImportState, cancel_transition, cancelable,
-        chapter_manifest_at, finish_import_commit, manga_id, prepare_download_folder,
-        rename_downloaded_pages, resolve_manga_at, resolve_mangadex,
+        chapter_manifest_at, chapter_url, finish_import_commit, manga_id,
+        prepare_chapter_download_folder, prepare_download_folder, rename_downloaded_pages,
+        resolve_manga_at, resolve_mangadex,
     };
 
     const MANGA_ID: &str = "b3f7d2b9-23f5-4b31-a042-40b7943c3983";
 
     #[test]
-    fn renames_manifest_pages_per_chapter_without_changing_extensions() {
+    fn renames_raw_pages_in_a_human_readable_chapter_folder_without_changing_extensions() {
         let directory = tempfile::tempdir().expect("create output directory");
-        let first = directory.path().join("chapter first-id");
-        let second = directory.path().join("chapter second-id");
-        fs::create_dir(&first).expect("create first chapter");
-        fs::create_dir(&second).expect("create second chapter");
-        fs::write(first.join("z.webp"), b"page").expect("write page");
-        fs::write(first.join("a.PNG"), b"page").expect("write page");
-        fs::write(second.join("page.jpg"), b"page").expect("write page");
+        let raw = directory.path().join("A Manga").join("Volume 1").join("Chapter 1");
+        fs::create_dir_all(&raw).expect("create raw chapter");
+        fs::write(directory.path().join("cover.jpg"), b"cover").expect("write cover");
+        fs::write(raw.join("z.webp"), b"page").expect("write page");
+        fs::write(raw.join("a.PNG"), b"page").expect("write page");
 
         rename_downloaded_pages(
             directory.path(),
-            &[
-                ChapterManifest {
-                    id: "first-id".to_owned(),
-                    number: "1".to_owned(),
-                    page_count: 2,
-                },
-                ChapterManifest {
-                    id: "second-id".to_owned(),
-                    number: "1".to_owned(),
-                    page_count: 1,
-                },
-            ],
+            &ChapterManifest {
+                id: "first-id".to_owned(),
+                number: "1".to_owned(),
+                page_count: 2,
+            },
         )
         .expect("rename pages");
 
-        assert!(first.join("chapter 1 page 1.PNG").is_file());
-        assert!(first.join("chapter 1 page 2.webp").is_file());
+        assert!(raw.join("chapter 1 page 1.PNG").is_file());
+        assert!(raw.join("chapter 1 page 2.webp").is_file());
+        assert!(!directory.path().join("cover.jpg").exists());
+    }
+
+    #[test]
+    fn keeps_duplicate_chapter_numbers_separate_in_their_id_roots() {
+        let directory = tempfile::tempdir().expect("create output directory");
+        let first = prepare_chapter_download_folder(directory.path(), "first-id")
+            .expect("create first chapter root");
+        let second = prepare_chapter_download_folder(directory.path(), "second-id")
+            .expect("create second chapter root");
+        fs::write(first.join("one.jpg"), b"page").expect("write first page");
+        fs::write(second.join("one.jpg"), b"page").expect("write second page");
+
+        rename_downloaded_pages(&first, &ChapterManifest {
+            id: "first-id".to_owned(),
+            number: "1".to_owned(),
+            page_count: 1,
+        })
+        .expect("rename first chapter");
+        rename_downloaded_pages(&second, &ChapterManifest {
+            id: "second-id".to_owned(),
+            number: "1".to_owned(),
+            page_count: 1,
+        })
+        .expect("rename second chapter");
+
+        assert!(first.join("chapter 1 page 1.jpg").is_file());
         assert!(second.join("chapter 1 page 1.jpg").is_file());
     }
 
     #[test]
-    fn refuses_to_rename_files_not_owned_by_the_manifest() {
-        let directory = tempfile::tempdir().expect("create output directory");
-        let chapter = directory.path().join("chapter chapter-id");
-        fs::create_dir(&chapter).expect("create chapter");
-        let unrelated = directory.path().join("unrelated.png");
-        fs::write(&unrelated, b"page").expect("write unrelated page");
-        fs::write(chapter.join("page.png"), b"page").expect("write chapter page");
-
-        let error = rename_downloaded_pages(
-            directory.path(),
-            &[ChapterManifest {
-                id: "chapter-id".to_owned(),
-                number: "1".to_owned(),
-                page_count: 1,
-            }],
-        )
-        .expect_err("unrelated file must be refused");
-
-        assert!(error.to_string().contains("unrelated"));
-        assert!(unrelated.is_file());
-        assert!(chapter.join("page.png").is_file());
+    fn downloads_each_manifest_entry_from_its_chapter_url() {
+        assert_eq!(
+            chapter_url("first-id"),
+            "https://mangadex.org/chapter/first-id"
+        );
     }
 
     #[test]

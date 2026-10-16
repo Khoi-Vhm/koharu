@@ -34,7 +34,18 @@ impl MangaDexDownloader {
     pub fn command(&self, manga_url: &str, language: &str, output: &Path) -> tokio::process::Command {
         let output = if output.is_absolute() { output.to_owned() } else { std::env::current_dir().expect("current directory is unavailable").join(output) };
         let mut command = tokio::process::Command::new(&self.python);
-        command.args(["-m", "mangadex_downloader", manga_url, "--language", language, "--save-as", "raw", "--path"]);
+        command.args([
+            "-m",
+            "mangadex_downloader",
+            manga_url,
+            "--language",
+            language,
+            "--save-as",
+            "raw",
+            "--cover",
+            "none",
+            "--path",
+        ]);
         command.arg(output);
         command
     }
@@ -253,11 +264,11 @@ mod tests {
     }
 
     #[test]
-    fn builds_a_raw_image_command_with_absolute_output() {
+    fn builds_a_raw_image_command_without_a_cover_and_with_absolute_output() {
         let root = tempfile::tempdir().unwrap();
         let downloader = MangaDexDownloader::for_test(root.path().join("python"));
-        let command = downloader.command("https://mangadex.org/title/abc", "ja", Path::new("downloads"));
+        let command = downloader.command("https://mangadex.org/chapter/abc", "ja", Path::new("downloads"));
         let actual = command.get_args().map(|value| value.to_string_lossy().into_owned()).collect::<Vec<_>>();
-        assert_eq!(actual, vec!["-m", "mangadex_downloader", "https://mangadex.org/title/abc", "--language", "ja", "--save-as", "raw", "--path", &std::env::current_dir().unwrap().join("downloads").display().to_string()]);
+        assert_eq!(actual, vec!["-m", "mangadex_downloader", "https://mangadex.org/chapter/abc", "--language", "ja", "--save-as", "raw", "--cover", "none", "--path", &std::env::current_dir().unwrap().join("downloads").display().to_string()]);
     }
 }

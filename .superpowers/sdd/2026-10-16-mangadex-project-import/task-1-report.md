@@ -48,3 +48,7 @@ The requested review changes therefore require a larger replacement of the insta
 - Removed the duplicate `Platform::name(self)` definition while retaining the mapping for all four supported targets.
 - `git diff --check` passed, and a declaration scan found no other duplicate function definitions in `mangadex.rs`.
 - `cargo`, `rustc`, and `rustfmt` are unavailable, so compilation and Rust tests remain unverified.
+
+## Final-review follow-up
+
+- Updated the pinned downloader command to pass its v3.1.4 `--cover none` option. The command test now verifies the complete raw, no-cover, chapter-URL argument sequence.
