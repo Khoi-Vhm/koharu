@@ -118,7 +118,7 @@ export function TitleBar() {
                   {t('menu.export')}
                 </MenubarSubTrigger>
                 <MenubarSubContent className='min-w-40 p-1'>
-                  {(['png', 'psd', 'cbz'] as const).map((format) => (
+                  {(['png', 'psd', 'cbz', 'epub'] as const).map((format) => (
                     <MenubarItem
                       key={format}
                       disabled={exporting}

@@ -36,6 +36,7 @@ koharu-ml = { path = "crates/koharu-ml" }
 koharu-pipeline = { path = "crates/koharu-pipeline" }
 koharu-translator = { path = "crates/koharu-translator" }
 koharu-psd = { path = "crates/koharu-psd" }
+koharu-epub = { path = "crates/koharu-epub" }
 koharu-renderer = { path = "crates/koharu-renderer" }
 koharu-rasterizer = { path = "crates/koharu-rasterizer", default-features = false }
 koharu-desktop = { path = "crates/koharu-desktop" }
@@ -46,9 +47,11 @@ alphanumeric-sort = "1.5.8"
 arc-swap = "1.9.2"
 hayro = "0.7.1"
 image = "0.25.10"
+png = "0.18.1"
 webp = { version = "0.3.1" }
 fast_image_resize = { version = "6.1.0", features = ["image", "rayon"] }
 anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 async-trait = "0.1.92"
 backon = { version = "1.6.0", default-features = false, features = ["std", "tokio-sleep"] }
 imageproc = "0.27.0"

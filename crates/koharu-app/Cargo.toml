@@ -21,6 +21,7 @@ hayro = { workspace = true }
 image = { workspace = true }
 koharu-agent = { workspace = true }
 koharu-desktop = { workspace = true }
+koharu-epub = { workspace = true }
 koharu-ml = { workspace = true }
 koharu-pipeline = { workspace = true }
 koharu-psd = { workspace = true }

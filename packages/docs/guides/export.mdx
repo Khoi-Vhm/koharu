@@ -1,14 +1,14 @@
 ---
-title: 'Export PNG and PSD'
-description: 'Export selected pages as flattened images or layered documents.'
+title: 'Export your project'
+description: 'Export all project pages as PNG, PSD, CBZ, or EPUB.'
 icon: 'file-export'
 ---
 
-Review the page composite before choosing **File → Export PNG** or **File → Export PSD**.
+Review the page composites, then choose **File → Export Project** and a format.
 
 <Steps>
-  <Step title="Select the pages">
-    Select pages in the page rail to export that selection. With no page selection, Koharu exports the active page.
+  <Step title="Review the project">
+    Export includes every page in project order, with current edits and translations. Page selection does not change the export scope.
   </Step>
   <Step title="Choose a format">
     <Tabs>
@@ -18,17 +18,27 @@ Review the page composite before choosing **File → Export PNG** or **File → 
       <Tab title="PSD">
         A layered document for further typography or artwork edits in a compatible editor. It contains the original image, a hidden text-removal mask, one layer per cleanup or paint layer, and editable text layers. The original image layer is hidden when a cleanup layer exists. Per-layer visibility and opacity are not written, although the merged preview honors them. Pages larger than 30000 pixels on a side cannot be exported as PSD.
       </Tab>
+      <Tab title="CBZ">
+        One comic book archive containing a flattened PNG for every page.
+      </Tab>
+      <Tab title="EPUB">
+        One EPUB 3 book with fixed-layout pages for compatible ebook readers. Every page is a full-resolution, lossless PNG with its current artwork and translated text. Page dimensions and project order are preserved. Text is part of the page image, so it is not searchable or reflowable.
+
+        Pages are rendered and encoded one at a time directly into a temporary archive on disk. Export jobs run sequentially. Pages exceeding 33,554,432 pixels (128 MiB for one RGBA surface), or 32,768 pixels on either side, are rejected before rendering. Rendering resources and GPU surfaces require additional memory; the full book is never held in RAM.
+      </Tab>
     </Tabs>
   </Step>
   <Step title="Choose a destination">
-    Select an output directory in the native folder dialog. Filenames use a four-digit counter in the order the pages are exported, followed by the page label:
+    For PNG and PSD, select an output directory. Filenames use a counter of at least four digits in project order, followed by the page label:
 
     ```text
     0001_page-name.png
     0002_page-name.png
     ```
 
-    A single page or a Shift-click range follows project order; a Ctrl-click selection follows click order. Characters that are invalid in filenames become underscores, and everything after the last dot in a label is dropped, so `vol.1` becomes `vol`. Existing files in the directory are overwritten.
+    Characters that are invalid in filenames become underscores, and everything after the last dot in a label is dropped, so `vol.1` becomes `vol`. To resume an interrupted PNG or PSD export, select the same directory again. Existing nonempty files with the expected filenames are skipped before rendering; missing and empty files are exported. New files appear only after their contents have been fully written. To export updated pages, delete their previous files or choose a new directory.
+
+    For CBZ and EPUB, choose a single output file in the save dialog. The suggested filename is the project name. The destination is replaced only after the entire archive completes successfully; a failed export leaves an existing book intact.
 
   </Step>
 </Steps>
@@ -41,6 +51,6 @@ Review the page composite before choosing **File → Export PNG** or **File → 
 
 ## Check consistency
 
-Canvas, PNG, and PSD begin with the same scene and prepared rendering result. If they differ, report the project revision, page, format, and images through [troubleshooting](/reference/troubleshooting).
+Canvas, PNG, PSD, CBZ, and EPUB begin with the same scene and prepared rendering result. If they differ, report the project revision, page, format, and images through [troubleshooting](/reference/troubleshooting).
 
 There is no separate “inpainted image only” export.

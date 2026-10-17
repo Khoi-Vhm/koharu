@@ -338,7 +338,7 @@ describe('greenfield editor', () => {
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument())
   })
 
-  it.each(['png', 'psd', 'cbz'] as const)(
+  it.each(['png', 'psd', 'cbz', 'epub'] as const)(
     'shows %s export activity and prevents duplicate exports',
     async (format) => {
       const user = userEvent.setup()

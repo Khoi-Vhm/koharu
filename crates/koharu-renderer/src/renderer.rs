@@ -1502,7 +1502,9 @@ impl NodeCache {
     }
 
     fn insert(&mut self, key: (EntityId, EntityId), node: Arc<RetainedNode>, clock: u64) {
-        if self.capacity == 0 {
+        // Image pixels belong to the byte-bounded image cache. Retaining them here
+        // would let the node-count limit pin gigabytes across completed pages.
+        if self.capacity == 0 || node.image.is_some() {
             return;
         }
         self.entries.insert(
@@ -1686,6 +1688,34 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn node_cache_does_not_retain_image_pixels() {
+        let blob = BlobId::for_bytes(b"image");
+        let image = Arc::new(DecodedImage {
+            width: 1,
+            height: 1,
+            encoded: Arc::from([0_u8; 1]),
+            pixels: Arc::from([0_u8; 4]),
+        });
+        let pixels = Arc::downgrade(&image.pixels);
+        let descriptor = NodeDescriptor::Image(ImageNodeDescriptor {
+            blob,
+            media_type: "image/png".into(),
+            expected_size: None,
+            require_size: None,
+        });
+        let images = HashMap::from([(blob, image)]);
+        let node = Arc::new(build_node(descriptor, &Fonts::new(), &images).unwrap());
+        let mut cache = NodeCache::new(2_048);
+        let page = EntityId::new();
+        cache.insert((page, page), node, 1);
+        drop(images);
+        assert!(
+            pixels.upgrade().is_none(),
+            "image cache must own pixel retention"
+        );
+    }
 
     #[test]
     fn vertical_alignment_defaults_to_start_and_uses_the_inline_axis() {
