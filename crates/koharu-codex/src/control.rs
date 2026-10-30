@@ -38,8 +38,8 @@ impl Control {
         }
     }
 
-    pub(crate) fn ensure_running(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(!self.is_cancelled(), "agent run was cancelled");
+    pub fn ensure_running(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(!self.is_cancelled(), "Codex request was cancelled");
         Ok(())
     }
 }

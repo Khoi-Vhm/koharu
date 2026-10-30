@@ -36,6 +36,8 @@
     "properties": "Özellikler",
     "reasoning": "Akıl yürütme",
     "reasoningLevels": {
+      "none": "Yok",
+      "minimal": "En düşük",
       "high": "Yüksek",
       "low": "Düşük",
       "max": "Maksimum",
@@ -265,6 +267,7 @@
   },
   "model": {
     "baseUrl": "Temel URL",
+    "modelsUrl": "Model listesi URL’si (isteğe bağlı)",
     "default": "Varsayılan",
     "instructions": "Çeviri talimatları",
     "targetLanguage": "Hedef dil"

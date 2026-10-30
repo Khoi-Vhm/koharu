@@ -1,3 +1,5 @@
+mod lines;
+
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, VecDeque},
@@ -21,11 +23,12 @@ use koharu_ml::koharu_layout_rfdetr_seg_2xl::{
     KoharuLayoutDetection, KoharuLayoutDetections, KoharuLayoutMask, KoharuLayoutRFDetrSeg2XL,
     KoharuLayoutThresholds,
 };
+use koharu_ml::pp_ocr_v6::det::PPOCRV6MediumDet;
 use koharu_scene::{
     AssetInput, AssetMetadata, AssetRole, At, BubbleRegion, DetectionAnalysis, DetectionLabel,
     EntityId, EntityOrigin, FitsTo, FlowsIn, Generation, Geometry, Inside, Origin, PanelRegion,
-    Point, RecognizedFrom, Region, RegionKind, RegionSpec, RemovePolicy, TextLayout,
-    TextLayoutKind, TextRegion, TextRole, Typography, WritingMode,
+    Point, RecognizedFrom, Region, RegionKind, RegionSpec, TextLayout, TextLayoutKind, TextRegion,
+    TextRole, Typography, WritingMode,
 };
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -48,6 +51,9 @@ const COLOR_CLUSTER_COUNT: usize = 4;
 const MIN_EXTREME_COLOR_PIXELS: u32 = 4;
 const MIN_MEASURED_STROKE_WIDTH: u8 = 2;
 const DIALOGUE_MASK_CONTAINMENT_THRESHOLD: f32 = 0.9;
+// PP-OCR expands line quads around glyphs; allow their padding to extend beyond
+// a saved text region without treating the same line as newly discovered text.
+const TEXT_COVERAGE_THRESHOLD: f32 = 0.6;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Type)]
 #[serde(default)]
@@ -99,20 +105,6 @@ impl StageProcessor for Processor {
         MODEL_NAME
     }
 
-    fn skip(&self, input: &StageInput) -> Result<bool> {
-        for entity in input.scene.descendants(input.page)? {
-            let id = entity.id();
-            if input.contains_entity(id)?
-                && entity
-                    .component::<Region>()?
-                    .is_some_and(|region| region.kind == TextRegion::kind())
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     fn unload(&self) -> bool {
         self.model.unload()
     }
@@ -137,19 +129,24 @@ impl StageProcessor for Processor {
 struct Model {
     network: Arc<Mutex<KoharuLayoutRFDetrSeg2XL>>,
     thresholds: KoharuLayoutThresholds,
+    text_network: Arc<Mutex<PPOCRV6MediumDet>>,
 }
 
 impl Model {
     async fn load(device: koharu_ml::Device, config: &DetectionModel) -> Result<Self> {
         let DetectionModel::KoharuLayoutRFDetrSeg2XL(config) = config;
-        let network = KoharuLayoutRFDetrSeg2XL::load(device).await?;
+        let network = KoharuLayoutRFDetrSeg2XL::load(device.clone()).await?;
+        let text_network = PPOCRV6MediumDet::load(device).await?;
         let mut thresholds = network.recommended_thresholds();
-        thresholds.text = config.text_threshold.unwrap_or(thresholds.text);
+        // The checkpoint's 0.25 cutoff drops small, angled status notices.
+        // Favor recall in the translation pipeline; explicit preferences still win.
+        thresholds.text = config.text_threshold.unwrap_or(0.15);
         thresholds.bubble = config.bubble_threshold.unwrap_or(thresholds.bubble);
         thresholds.panel = config.panel_threshold.unwrap_or(thresholds.panel);
         Ok(Self {
             network: Arc::new(Mutex::new(network)),
             thresholds,
+            text_network: Arc::new(Mutex::new(text_network)),
         })
     }
 
@@ -160,18 +157,33 @@ impl Model {
             .get(&input.scene, page, "source")
             .await?
             .ok_or_else(|| anyhow!("page {page} has no source image"))?;
-        let output = self.detect(image.clone()).await?;
+        let (mut output, lines) = self.detect(image.clone()).await?;
+        let preserved = preserve_text_regions(&input.scene, page, &mut output)?;
+        lines::supplement(&mut output, lines, &preserved);
         build_patch(&input, &image, output, &generation(PRODUCER, MODEL_ID)?).await
     }
 
-    async fn detect(&self, image: Arc<DynamicImage>) -> Result<KoharuLayoutDetections> {
+    async fn detect(
+        &self,
+        image: Arc<DynamicImage>,
+    ) -> Result<(
+        KoharuLayoutDetections,
+        koharu_ml::pp_ocr_v6::det::TextDetections,
+    )> {
         let network = self.network.clone();
+        let text_network = self.text_network.clone();
         let thresholds = self.thresholds;
         tokio_rayon::spawn(move || {
             let network = network
                 .lock()
                 .map_err(|_| anyhow!("layout model lock is poisoned"))?;
-            network.inference_with_thresholds(&image, thresholds)
+            let mut output = network.inference_with_thresholds(&image, thresholds)?;
+            non_maximum_suppression(&mut output.detections, 0.5);
+            let lines = text_network
+                .lock()
+                .map_err(|_| anyhow!("text detector lock is poisoned"))?
+                .inference(&image)?;
+            Ok((output, lines))
         })
         .await
     }
@@ -218,41 +230,10 @@ async fn build_patch(
     let page = input.page;
     let mut edit = input.scene.edit_as(generation.clone());
     edit.observe_subtree(page)?;
-    remove_previous_regions(input, &mut edit, generation)
-        .context("failed to replace the previous detection regions")?;
     write_page(input, &mut edit, page, image, output, generation)
         .await
         .context("failed to write detection output")?;
     finish(edit)
-}
-
-fn remove_previous_regions(
-    input: &StageInput,
-    edit: &mut koharu_scene::Edit,
-    generation: &Generation,
-) -> Result<()> {
-    let mut remove = Vec::new();
-    for entity in input.scene.descendants(input.page)? {
-        let id = entity.id();
-        if !input.contains_entity(id)? {
-            continue;
-        }
-        let owned_region = entity
-            .component::<EntityOrigin>()?
-            .is_some_and(|origin| {
-                matches!(origin.origin, Origin::Generated(ref owner) if owner.producer == generation.producer)
-            })
-            && entity.component::<Region>()?.is_some();
-        if owned_region {
-            remove.push(id);
-        }
-    }
-    for entity in remove {
-        if input.scene.entity(entity).is_ok() {
-            edit.remove_entity(entity, RemovePolicy::Cascade)?;
-        }
-    }
-    Ok(())
 }
 
 async fn write_page(
@@ -315,6 +296,16 @@ fn write_regions<'a>(
         None
     };
     for (index, (detection, inferred)) in detections.iter().zip(inferred).enumerate() {
+        if let Some(entity) = existing_region(snapshot, page, detection)? {
+            if detection.label == "bubble" {
+                regions.bubbles.push(DetectedRegion {
+                    entity,
+                    mask: &detection.mask,
+                    area: detection.area,
+                });
+            }
+            continue;
+        }
         match write_region(edit, page, detection, inferred, generation)
             .with_context(|| format!("failed to write {} detection {index}", detection.label))?
         {
@@ -330,6 +321,104 @@ fn write_regions<'a>(
         }
     }
     Ok(regions)
+}
+
+fn preserve_text_regions(
+    snapshot: &koharu_scene::Snapshot,
+    page: EntityId,
+    output: &mut KoharuLayoutDetections,
+) -> Result<Vec<KoharuLayoutDetection>> {
+    let mut preserved = Vec::new();
+    for entity in snapshot.descendants(page)? {
+        if !entity
+            .component::<Region>()?
+            .is_some_and(|region| region.kind == TextRegion::kind())
+        {
+            continue;
+        }
+        let Some(geometry) = entity.component::<Geometry>()? else {
+            continue;
+        };
+        let Some(mask) =
+            lines::polygon_mask(&geometry.points, output.image_width, output.image_height)
+        else {
+            continue;
+        };
+        let bounds = [
+            mask.x as f32,
+            mask.y as f32,
+            (mask.x + mask.width) as f32,
+            (mask.y + mask.height) as f32,
+        ];
+        preserved.push(KoharuLayoutDetection {
+            label_id: 0,
+            label: "text".into(),
+            score: 1.0,
+            bbox: bounds,
+            area: mask.pixels.iter().filter(|&&p| p != 0).count() as u32,
+            mask,
+        });
+    }
+    // A new block containing an old row cannot replace that row. Discard the
+    // conflicting block before supplementation so its uncovered rows can return
+    // as separate PP-OCR lines, while the saved geometry supplies coverage.
+    output.detections.retain(|candidate| {
+        candidate.label != "text"
+            || !preserved.iter().any(|old| {
+                if candidate.area > 0 {
+                    mask_containment(&old.mask, &candidate.mask, candidate.bbox) > 0.0
+                } else {
+                    intersection_over_union(old.bbox, candidate.bbox) >= 0.5
+                        || containment(old.bbox, candidate.bbox) >= 0.8
+                        || containment(candidate.bbox, old.bbox) >= 0.8
+                }
+            })
+    });
+    Ok(preserved)
+}
+
+fn existing_region(
+    snapshot: &koharu_scene::Snapshot,
+    page: EntityId,
+    detection: &KoharuLayoutDetection,
+) -> Result<Option<EntityId>> {
+    let kind = region_kind(&detection.label)?;
+    for entity in snapshot.descendants(page)? {
+        if !entity.component::<Region>()?.is_some_and(|region| {
+            region.kind == kind
+                && (detection.label != "onomatopoeia"
+                    || region.label.as_deref() == Some("onomatopoeia"))
+        }) {
+            continue;
+        }
+        let Some(geometry) = entity.component::<Geometry>()? else {
+            continue;
+        };
+        let Some((left, top, right, bottom)) = crate::scope::geometry_extents(&geometry) else {
+            continue;
+        };
+        let bounds = [left as f32, top as f32, right as f32, bottom as f32];
+        if detection.label == "text" && detection.area > 0 {
+            let size = snapshot.page(page)?.page()?;
+            if let Some(mask) = lines::polygon_mask(
+                &geometry.points,
+                size.width.ceil() as u32,
+                size.height.ceil() as u32,
+            ) && mask_containment(&mask, &detection.mask, detection.bbox)
+                >= TEXT_COVERAGE_THRESHOLD
+            {
+                return Ok(Some(entity.id()));
+            }
+            continue;
+        }
+        if intersection_over_union(bounds, detection.bbox) >= 0.5
+            || containment(bounds, detection.bbox) >= 0.8
+            || (detection.label == "text" && containment(detection.bbox, bounds) >= 0.8)
+        {
+            return Ok(Some(entity.id()));
+        }
+    }
+    Ok(None)
 }
 
 fn write_region<'a>(
@@ -348,7 +437,13 @@ fn write_region<'a>(
     } else if detection.label == "text" {
         inferred.map_or_else(
             || rectangle_geometry(detection.bbox),
-            |typography| rotated_rectangle_geometry(detection.bbox, typography.angle_degrees),
+            |typography| {
+                rotated_rectangle_geometry(
+                    detection.bbox,
+                    typography.angle_degrees,
+                    &detection.mask,
+                )
+            },
         )
     } else {
         rectangle_geometry(detection.bbox)
@@ -1300,7 +1395,48 @@ fn rectangle_geometry([left, top, right, bottom]: [f32; 4]) -> Geometry {
 fn rotated_rectangle_geometry(
     [left, top, right, bottom]: [f32; 4],
     angle_degrees: f32,
+    mask: &KoharuLayoutMask,
 ) -> Geometry {
+    if angle_degrees != 0.0 && valid_mask(mask) {
+        let (sin, cos) = f64::from(angle_degrees).to_radians().sin_cos();
+        let mut bounds = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        let padding = (sin.abs() + cos.abs()) * 0.5;
+        for y in mask.y..mask.y.saturating_add(mask.height) {
+            for x in mask.x..mask.x.saturating_add(mask.width) {
+                if !mask.contains(x, y)
+                    || (x as f32) < left
+                    || (x as f32) >= right
+                    || (y as f32) < top
+                    || (y as f32) >= bottom
+                {
+                    continue;
+                }
+                let (x, y) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                let (u, v) = (x * cos + y * sin, -x * sin + y * cos);
+                bounds[0] = bounds[0].min(u - padding);
+                bounds[1] = bounds[1].min(v - padding);
+                bounds[2] = bounds[2].max(u + padding);
+                bounds[3] = bounds[3].max(v + padding);
+            }
+        }
+        if bounds.iter().all(|value| value.is_finite()) {
+            let [left, top, right, bottom] = bounds;
+            return Geometry {
+                origin: Origin::User,
+                points: [(left, top), (right, top), (right, bottom), (left, bottom)]
+                    .map(|(u, v)| Point {
+                        x: u * cos - v * sin,
+                        y: u * sin + v * cos,
+                    })
+                    .into(),
+            };
+        }
+    }
     let width = f64::from((right - left).max(1.0));
     let height = f64::from((bottom - top).max(1.0));
     let center_x = f64::from(left + right) * 0.5;
@@ -1381,6 +1517,15 @@ async fn write_mask(
     } else {
         mask_for(detections, "text", size)
     };
+    if let Some(previous) = input.images.get(&input.scene, page, "text-mask").await? {
+        let previous = previous.to_luma8();
+        if previous.dimensions() != mask.dimensions() {
+            bail!("existing text-mask dimensions do not match page {page}");
+        }
+        for (pixel, previous) in mask.iter_mut().zip(previous.as_raw()) {
+            *pixel = (*pixel).max(*previous);
+        }
+    }
     if let Some(bounds) = input.region {
         preserve_mask_outside_region(input, page, "text-mask", bounds, &mut mask).await?;
     }
@@ -1630,6 +1775,10 @@ fn detection_order(left: &KoharuLayoutDetection, right: &KoharuLayoutDetection) 
         .then_with(|| left.label.cmp(&right.label))
 }
 
+fn text_masks_overlap(left: &KoharuLayoutDetection, right: &KoharuLayoutDetection) -> bool {
+    left.area == 0 || right.area == 0 || mask_containment(&left.mask, &right.mask, right.bbox) > 0.0
+}
+
 fn non_maximum_suppression(detections: &mut Vec<KoharuLayoutDetection>, threshold: f32) {
     detections.sort_by(|left, right| {
         right
@@ -1641,7 +1790,12 @@ fn non_maximum_suppression(detections: &mut Vec<KoharuLayoutDetection>, threshol
     for candidate in detections.drain(..) {
         let suppressed = kept.iter().any(|existing: &KoharuLayoutDetection| {
             existing.label == candidate.label
-                && intersection_over_union(existing.bbox, candidate.bbox) >= threshold
+                && (intersection_over_union(existing.bbox, candidate.bbox) >= threshold
+                    // A whole text block and its individual rows can have low IoU.
+                    // Keep the stronger reading when it already covers this crop.
+                    || (candidate.label == "text"
+                        && containment(existing.bbox, candidate.bbox) >= 0.9))
+                && (candidate.label != "text" || text_masks_overlap(existing, &candidate))
         });
         if !suppressed {
             kept.push(candidate);
@@ -1869,7 +2023,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detection_skips_a_page_with_existing_text() {
+    async fn detection_can_add_missed_text_to_an_existing_page() {
         let mut session = Session::memory().await.unwrap();
         let mut page = None;
         let patch = session
@@ -1901,7 +2055,115 @@ mod tests {
             koharu_ml::Device::cpu(),
         );
 
-        assert!(processor.skip(&input).unwrap());
+        assert!(!processor.skip(&input).unwrap());
+    }
+
+    #[tokio::test]
+    async fn repeated_detection_preserves_authored_text_and_adds_only_missing_regions() {
+        let mut session = Session::memory().await.unwrap();
+        let generation = generation(super::PRODUCER, super::MODEL_ID).unwrap();
+        let image = image::DynamicImage::new_rgb8(100, 100);
+        let old = detection("text", 0.9, [10.0, 10.0, 40.0, 30.0]);
+        let mut ids = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let page = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                let RegionOutput::Text(text) =
+                    write_region(edit, page, &old, None, &generation).unwrap()
+                else {
+                    unreachable!()
+                };
+                edit.set(
+                    text.content,
+                    &koharu_scene::SourceText {
+                        text: koharu_scene::Authored::user("corrected source".to_owned()),
+                        language: None,
+                    },
+                )?;
+                edit.set(
+                    text.content,
+                    &koharu_scene::Translation {
+                        text: koharu_scene::Authored::user("corrected translation".to_owned()),
+                        language: None,
+                    },
+                )?;
+                ids = Some((page, text.entity, text.content, text.layer));
+                Ok(())
+            })
+            .unwrap();
+        session.commit(patch).await.unwrap();
+        let (page, region, content, layer) = ids.unwrap();
+        for _ in 0..2 {
+            let input = StageInput::new(
+                session.snapshot(),
+                page,
+                None,
+                None,
+                std::sync::Arc::new(crate::ImageCache::default()),
+                None,
+            );
+            let mut output = koharu_ml::koharu_layout_rfdetr_seg_2xl::KoharuLayoutDetections {
+                image_width: 100,
+                image_height: 100,
+                detections: vec![
+                    old.clone(),
+                    detection("text", 0.8, [50.0, 50.0, 80.0, 70.0]),
+                    detection("text", 0.9, [10.0, 10.0, 40.0, 80.0]),
+                ],
+            };
+            let preserved = super::preserve_text_regions(&input.scene, page, &mut output).unwrap();
+            super::lines::supplement(
+                &mut output,
+                koharu_ml::pp_ocr_v6::det::TextDetections {
+                    detections: [5.0, 40.0, 65.0]
+                        .map(|y| koharu_ml::pp_ocr_v6::det::TextDetection {
+                            polygon: [[10.0, y], [40.0, y], [40.0, y + 15.0], [10.0, y + 15.0]],
+                            score: 0.9,
+                        })
+                        .into(),
+                },
+                &preserved,
+            );
+            let patch = super::build_patch(&input, &image, output, &generation)
+                .await
+                .unwrap();
+            let scene = session.commit(patch).await.unwrap().snapshot;
+            assert!(scene.entity(region).is_ok());
+            assert!(scene.entity(layer).is_ok());
+            assert_eq!(
+                scene
+                    .component::<koharu_scene::SourceText>(content)
+                    .unwrap()
+                    .unwrap()
+                    .text
+                    .value,
+                "corrected source"
+            );
+            assert_eq!(
+                scene
+                    .component::<koharu_scene::Translation>(content)
+                    .unwrap()
+                    .unwrap()
+                    .text
+                    .value,
+                "corrected translation"
+            );
+            assert_eq!(
+                scene
+                    .entities_with::<koharu_scene::SourceText>()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                scene
+                    .entities_with::<koharu_scene::TextContent>()
+                    .unwrap()
+                    .len(),
+                4
+            );
+        }
     }
 
     #[tokio::test]
@@ -1991,7 +2253,7 @@ mod tests {
         );
     }
 
-    fn detection(label: &str, score: f32, bbox: [f32; 4]) -> KoharuLayoutDetection {
+    pub(super) fn detection(label: &str, score: f32, bbox: [f32; 4]) -> KoharuLayoutDetection {
         KoharuLayoutDetection {
             label_id: 0,
             label: label.to_owned(),
@@ -2265,6 +2527,112 @@ mod tests {
         assert_eq!(typography.stroke_width, Some(3.0));
     }
 
+    #[tokio::test]
+    async fn parallel_tilted_rows_are_not_duplicates_when_their_boxes_overlap() {
+        let mut session = Session::memory().await.unwrap();
+        let points = [[10.0, 10.0], [90.0, 70.0], [86.0, 76.0], [6.0, 16.0]]
+            .map(|[x, y]| koharu_scene::Point { x, y });
+        let shifted = points.clone().map(|p| koharu_scene::Point {
+            x: p.x,
+            y: p.y + 12.0,
+        });
+        let mut page = None;
+        let patch = session
+            .snapshot()
+            .patch(|edit| {
+                let id = edit.add_page(PageDraft::new("page", 100.0, 100.0), At::End)?;
+                edit.add_analysis_region::<TextRegion>(
+                    id,
+                    At::End,
+                    &Geometry {
+                        origin: Origin::User,
+                        points: points.clone().into(),
+                    },
+                    None,
+                )?;
+                page = Some(id);
+                Ok(())
+            })
+            .unwrap();
+        let scene = session.commit(patch).await.unwrap().snapshot;
+        let mask = super::lines::polygon_mask(&shifted, 100, 100).unwrap();
+        let mut candidate = detection("text", 0.9, [6.0, 22.0, 90.0, 88.0]);
+        candidate.area = mask.pixels.iter().filter(|&&p| p != 0).count() as u32;
+        candidate.mask = mask;
+        assert!(
+            super::existing_region(&scene, page.unwrap(), &candidate)
+                .unwrap()
+                .is_none()
+        );
+        let mut output = koharu_ml::koharu_layout_rfdetr_seg_2xl::KoharuLayoutDetections {
+            image_width: 100,
+            image_height: 100,
+            detections: vec![candidate],
+        };
+        super::preserve_text_regions(&scene, page.unwrap(), &mut output).unwrap();
+        assert_eq!(output.detections.len(), 1);
+        let mut fresh = koharu_ml::koharu_layout_rfdetr_seg_2xl::KoharuLayoutDetections {
+            image_width: 100,
+            image_height: 100,
+            detections: Vec::new(),
+        };
+        super::lines::supplement(
+            &mut fresh,
+            koharu_ml::pp_ocr_v6::det::TextDetections {
+                detections: [points, shifted]
+                    .map(|polygon| koharu_ml::pp_ocr_v6::det::TextDetection {
+                        polygon: polygon.map(|p| [p.x as f32, p.y as f32]),
+                        score: 0.9,
+                    })
+                    .into(),
+            },
+            &[],
+        );
+        assert_eq!(fresh.detections.len(), 2);
+        super::non_maximum_suppression(&mut fresh.detections, 0.5);
+        assert_eq!(fresh.detections.len(), 2);
+        let input = StageInput::new(
+            scene,
+            page.unwrap(),
+            None,
+            None,
+            std::sync::Arc::new(crate::ImageCache::default()),
+            None,
+        );
+        let patch = super::build_patch(
+            &input,
+            &image::DynamicImage::new_rgb8(100, 100),
+            fresh,
+            &generation(super::PRODUCER, super::MODEL_ID).unwrap(),
+        )
+        .await
+        .unwrap();
+        let scene = session.commit(patch).await.unwrap().snapshot;
+        assert_eq!(
+            scene
+                .entities_with::<koharu_scene::TextContent>()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn tilted_line_geometry_uses_mask_extents_without_rotating_its_box_twice() {
+        let points = [[10.0, 10.0], [50.0, 50.0], [45.0, 55.0], [5.0, 15.0]]
+            .map(|[x, y]| koharu_scene::Point { x, y });
+        let mask = super::lines::polygon_mask(&points, 100, 100).unwrap();
+        let line = KoharuLayoutDetection {
+            mask,
+            ..detection("text", 0.9, [5.0, 10.0, 50.0, 55.0])
+        };
+        // The recovered line should retain a roughly 7px height, not the 45px AABB height.
+        let geometry = super::rotated_rectangle_geometry(line.bbox, 45.0, &line.mask);
+        let height = (geometry.points[2].x - geometry.points[1].x)
+            .hypot(geometry.points[2].y - geometry.points[1].y);
+        assert!(height < 10.0);
+    }
+
     #[test]
     fn nms_removes_lower_scored_overlapping_regions_per_class() {
         let mut detections = vec![
@@ -2282,12 +2650,39 @@ mod tests {
             .filter(|detection| detection.label == "text")
             .map(|detection| detection.score)
             .collect::<Vec<_>>();
-        assert_eq!(text_scores, [0.9, 0.6, 0.5]);
+        assert_eq!(text_scores, [0.9, 0.6]);
         assert!(
             detections
                 .iter()
                 .any(|detection| detection.label == "bubble")
         );
+    }
+
+    #[test]
+    fn nms_removes_nested_skill_list_crops_but_keeps_separate_text() {
+        // Page 15: a complete skill list and four partial readings of it.
+        let mut detections = vec![
+            detection("text", 0.497, [405.0, 135.0, 786.0, 573.0]),
+            detection("text", 0.437, [587.0, 133.0, 793.0, 170.0]),
+            detection("text", 0.343, [412.0, 213.0, 758.0, 296.0]),
+            detection("text", 0.292, [409.0, 388.0, 804.0, 574.0]),
+            detection("text", 0.273, [422.0, 445.0, 654.0, 569.0]),
+            detection("text", 0.2, [405.0, 580.0, 786.0, 610.0]),
+            detection("bubble", 0.7, [587.0, 133.0, 793.0, 170.0]),
+        ];
+
+        non_maximum_suppression(&mut detections, 0.5);
+
+        let text_boxes = detections
+            .iter()
+            .filter(|value| value.label == "text")
+            .map(|value| value.bbox)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            text_boxes,
+            [[405.0, 135.0, 786.0, 573.0], [405.0, 580.0, 786.0, 610.0],]
+        );
+        assert!(detections.iter().any(|value| value.label == "bubble"));
     }
 
     #[test]

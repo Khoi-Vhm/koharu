@@ -36,6 +36,8 @@
     "properties": "Свойства",
     "reasoning": "Рассуждение",
     "reasoningLevels": {
+      "none": "Нет",
+      "minimal": "Минимальный",
       "high": "Высокий",
       "low": "Низкий",
       "max": "Максимальный",
@@ -265,6 +267,7 @@
   },
   "model": {
     "baseUrl": "Базовый URL",
+    "modelsUrl": "URL списка моделей (необязательно)",
     "default": "По умолчанию",
     "instructions": "Инструкции",
     "targetLanguage": "Язык перевода"

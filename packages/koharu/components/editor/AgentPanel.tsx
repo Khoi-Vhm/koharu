@@ -5,7 +5,7 @@ import { Bot, CircleStop, LogOut, Send, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { call } from '@/lib/backend'
+import { call, refreshTranslationModels } from '@/lib/backend'
 import { pageKey, pagesKey, projectKey, refresh } from '@/lib/queries'
 import {
   commands,
@@ -259,6 +259,7 @@ export function AgentPanel() {
     try {
       setStatus(await call(commands.loginAgent, channel))
       setLoginEvent(null)
+      await refreshTranslationModels(true)
     } finally {
       setLoggingIn(false)
     }
@@ -268,6 +269,7 @@ export function AgentPanel() {
     setStatus(await call(commands.logoutAgent))
     setMessages([])
     setActivity(null)
+    await refreshTranslationModels(true)
   }
 
   async function saveConfig(config: Config) {

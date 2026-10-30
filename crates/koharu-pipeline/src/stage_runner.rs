@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Result;
-use koharu_scene::{EntityId, Patch};
+use koharu_scene::EntityId;
 
 use crate::{
     ErrorKind, PipelineConfig, PipelineError, Progress, ProgressSink, Stage, StopToken,
@@ -125,11 +125,11 @@ impl StageRunner {
         self.stages
             .process(job.stage, job.input.clone())
             .await
-            .map(|patch| {
-                if patch.is_empty() {
+            .map(|output| {
+                if output.patch.is_empty() {
                     StageOutcome::Skipped
                 } else {
-                    StageOutcome::Patch(patch)
+                    StageOutcome::Patch(output)
                 }
             })
             .map_err(|error| AttemptFailure {
@@ -186,7 +186,7 @@ impl StageJob {
 }
 
 pub(crate) enum StageOutcome {
-    Patch(Patch),
+    Patch(crate::StageOutput),
     Skipped,
     Stopped,
 }

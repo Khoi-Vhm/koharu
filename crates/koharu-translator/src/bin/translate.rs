@@ -90,9 +90,10 @@ async fn main() -> Result<()> {
     if let Some(instructions) = args.instructions {
         request = request.with_instructions(instructions);
     }
-    let (_, translated) = translator
+    let result = translator
         .translate(&selection, GenerationConfig::default(), request)
         .await?;
+    let translated = result.translations;
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&translated)?);
@@ -107,7 +108,7 @@ async fn main() -> Result<()> {
 fn prepare_secret(args: &Args, provider: Provider) -> Result<()> {
     let provider_id: &'static str = provider.into();
     let Some((variable, required)) = (match provider {
-        Provider::Local => None,
+        Provider::Local | Provider::Codex => None,
         Provider::OpenAi => Some(("OPENAI_API_KEY", true)),
         Provider::Gemini => Some(("GEMINI_API_KEY", true)),
         Provider::Claude => Some(("ANTHROPIC_API_KEY", true)),

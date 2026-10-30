@@ -36,6 +36,8 @@
     "properties": "属性",
     "reasoning": "推理",
     "reasoningLevels": {
+      "none": "无",
+      "minimal": "最低",
       "high": "高",
       "low": "低",
       "max": "最大",
@@ -265,6 +267,7 @@
   },
   "model": {
     "baseUrl": "基础 URL",
+    "modelsUrl": "模型列表 URL（可选）",
     "default": "默认",
     "instructions": "翻译说明",
     "targetLanguage": "目标语言"

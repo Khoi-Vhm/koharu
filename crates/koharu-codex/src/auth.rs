@@ -124,9 +124,15 @@ impl Auth {
         self.refresh_tokens(current).await
     }
 
-    pub(super) async fn force_refresh(&self) -> Result<Session> {
+    pub(super) async fn force_refresh(&self, rejected_access: &str) -> Result<Session> {
         let _refresh = self.refresh.lock().await;
         let current = self.store.load()?.context("Codex is not signed in")?;
+        if current.access != rejected_access {
+            return Ok(Session {
+                account: account(&current)?,
+                access: current.access,
+            });
+        }
         self.refresh_tokens(current).await
     }
 
@@ -246,11 +252,14 @@ impl Auth {
         let body: TokenResponse = response.json().await?;
         let tokens = tokens(body)?;
         let account = account(&tokens)?;
+        let _refresh = self.refresh.lock().await;
+        control.ensure_running()?;
         self.store.store(&tokens)?;
         Ok(account)
     }
 
-    pub(super) fn logout(&self) -> Result<()> {
+    pub(super) async fn logout(&self) -> Result<()> {
+        let _refresh = self.refresh.lock().await;
         self.store.delete()
     }
 }

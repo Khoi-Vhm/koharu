@@ -27,13 +27,23 @@ Only one sign-in attempt can run at a time. Cancel it before starting another.
 The Agent starts with the open project's semantic state. It renders and attaches a page image only when it invokes visual page inspection; it does not automatically attach every page.
 
 <Note>
-  Agent sign-in and translation-provider credentials are separate. ChatGPT sign-in does not
-  configure the pipeline's OpenAI provider, and an OpenAI API key does not sign in the Agent.
+  Codex translation shares the Agent sign-in. Other translation-provider credentials are separate.
+  ChatGPT sign-in does not configure the pipeline's OpenAI provider, and an OpenAI API key does not
+  sign in the Agent.
 </Note>
+
+## Translate with Codex
+
+After signing in, choose a **Codex** model in the processing selector or **Settings → Translation**.
+Translate and full processing use this selection independently of the Agent panel's model.
+The translator sends OCR segments, the target language, translation instructions, and the
+source page image when **Vision** is enabled and supported. It does not send Agent chat history
+or give the model project-editing tools. Signing out also removes access to Codex translation
+for subsequent requests.
 
 ## Sign out
 
-**Sign out** cancels active work, clears the current Agent session, and removes the Codex account authorization used by Koharu. Opening or closing a project also clears the conversation. Agent configuration is saved separately from translator settings.
+**Sign out** cancels Agent work, clears the current Agent session, and removes the Codex account authorization used by Koharu. Opening or closing a project also clears the conversation. Agent configuration is saved separately from translator settings.
 
 <Card title='Work with a project' icon='comment' href='/agent/projects'>
   Give the Agent a precise scope, review its edits, and use project history.

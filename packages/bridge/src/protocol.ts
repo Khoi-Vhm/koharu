@@ -132,10 +132,13 @@ export type CanvasState = {
 
 export type ClaudeConfig = Record<string, never>;
 
+export type CodexConfig = Record<string, never>;
+
 export type CodexModel = {
 	id: string,
 	name: string,
 	reasoning: Reasoning[],
+	vision: boolean,
 };
 
 export type Config = {
@@ -363,6 +366,7 @@ export type OcrModel = { model: "paddleocr-vl-1.6" } | { model: "manga-ocr" } | 
 
 export type OpenAiCompatibleConfig = {
 	base_url?: string | null,
+	models_url?: string | null,
 };
 
 export type OpenAiConfig = Record<string, never>;
@@ -446,9 +450,9 @@ export type ProjectSummary = {
 	name: string,
 };
 
-export type Provider = "local" | "openai" | "gemini" | "claude" | "grok" | "minimax" | "deepseek" | "openai-compatible" | "openrouter" | "lm-studio" | "deepl" | "google-cloud-translation" | "caiyun";
+export type Provider = "local" | "codex" | "openai" | "gemini" | "claude" | "grok" | "minimax" | "deepseek" | "openai-compatible" | "openrouter" | "lm-studio" | "deepl" | "google-cloud-translation" | "caiyun";
 
-export type ProviderConfig = { provider: "local"; settings: LocalConfig } | { provider: "openai"; settings: OpenAiConfig } | { provider: "gemini"; settings: GeminiConfig } | { provider: "claude"; settings: ClaudeConfig } | { provider: "grok"; settings: GrokConfig } | { provider: "minimax"; settings: MiniMaxConfig } | { provider: "deepseek"; settings: DeepSeekConfig } | { provider: "openai-compatible"; settings: OpenAiCompatibleConfig } | { provider: "openrouter"; settings: OpenRouterConfig } | { provider: "lm-studio"; settings: LmStudioConfig } | { provider: "deepl"; settings: DeepLConfig } | { provider: "google-cloud-translation"; settings: GoogleCloudConfig } | { provider: "caiyun"; settings: CaiyunConfig };
+export type ProviderConfig = { provider: "local"; settings: LocalConfig } | { provider: "codex"; settings: CodexConfig } | { provider: "openai"; settings: OpenAiConfig } | { provider: "gemini"; settings: GeminiConfig } | { provider: "claude"; settings: ClaudeConfig } | { provider: "grok"; settings: GrokConfig } | { provider: "minimax"; settings: MiniMaxConfig } | { provider: "deepseek"; settings: DeepSeekConfig } | { provider: "openai-compatible"; settings: OpenAiCompatibleConfig } | { provider: "openrouter"; settings: OpenRouterConfig } | { provider: "lm-studio"; settings: LmStudioConfig } | { provider: "deepl"; settings: DeepLConfig } | { provider: "google-cloud-translation"; settings: GoogleCloudConfig } | { provider: "caiyun"; settings: CaiyunConfig };
 
 export type ProviderPreference = {
 	name: string,
@@ -468,7 +472,7 @@ export type Quantization = {
 
 export type RasterLayerKind = "cleanup" | "paint";
 
-export type Reasoning = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+export type Reasoning = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export type Revision = number;
 

@@ -6,14 +6,15 @@ use crate::Reasoning;
 
 use super::{CodexModel, auth::Auth};
 
-const MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models?client_version=0.146.0";
+// The server gates model visibility on the supported Codex client version.
+const MODELS_URL: &str = "https://chatgpt.com/backend-api/codex/models?client_version=0.163.0";
 const MAX_CATALOG_BYTES: usize = 1024 * 1024;
 
 pub(super) async fn models(client: &Client, auth: &Auth) -> Result<Vec<CodexModel>> {
     let mut session = auth.session().await?;
     let mut response = request(client, &session).await?;
     if response.status() == StatusCode::UNAUTHORIZED {
-        session = auth.force_refresh().await?;
+        session = auth.force_refresh(&session.access).await?;
         response = request(client, &session).await?;
     }
     if !response.status().is_success() {
@@ -82,6 +83,8 @@ fn parse(value: &Value) -> Option<CodexModel> {
                 .as_str()
                 .or_else(|| level.get("effort")?.as_str())
                 .and_then(|level| match level {
+                    "none" => Some(Reasoning::None),
+                    "minimal" => Some(Reasoning::Minimal),
                     "low" => Some(Reasoning::Low),
                     "medium" => Some(Reasoning::Medium),
                     "high" => Some(Reasoning::High),
@@ -106,6 +109,14 @@ fn parse(value: &Value) -> Option<CodexModel> {
             .unwrap_or(id)
             .to_owned(),
         reasoning,
+        vision: value
+            .get("input_modalities")
+            .and_then(Value::as_array)
+            .is_some_and(|modalities| {
+                modalities
+                    .iter()
+                    .any(|modality| modality.as_str() == Some("image"))
+            }),
     })
 }
 
@@ -114,6 +125,30 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn preserves_advertised_disabled_and_minimal_reasoning() {
+        let model = parse(&json!({
+            "slug": "codex", "supported_reasoning_levels": ["none", "minimal", "low", "medium"]
+        }))
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(model.reasoning).unwrap(),
+            json!(["none", "minimal", "low", "medium"])
+        );
+    }
+
+    #[test]
+    fn image_support_comes_from_the_model_catalog() {
+        let visual =
+            parse(&json!({"slug": "visual", "input_modalities": ["text", "image"]})).unwrap();
+        let text = parse(&json!({"slug": "text", "input_modalities": ["text"]})).unwrap();
+        let unknown = parse(&json!({"slug": "unknown"})).unwrap();
+        assert!(visual.vision);
+        assert!(!text.vision);
+        assert!(!unknown.vision);
+        assert!(parse(&json!({"slug": "hidden", "visibility": "hidden"})).is_none());
+    }
 
     #[test]
     fn reasoning_aliases_are_normalized_once() {

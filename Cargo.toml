@@ -19,6 +19,7 @@ keywords = ["manga", "ocr", "translation", "deep_learning", "computer_vision"]
 publish = false
 
 [workspace.dependencies]
+koharu-codex = { path = "crates/koharu-codex" }
 koharu-app = { path = "crates/koharu-app" }
 koharu-bindgen = { path = "crates/koharu-bindgen" }
 koharu-config = { path = "crates/koharu-config" }

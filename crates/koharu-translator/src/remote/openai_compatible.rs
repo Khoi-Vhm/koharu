@@ -18,6 +18,7 @@ const DEFAULT_BASE_URL: &str = "http://localhost:11434/v1";
 #[serde(default)]
 pub struct OpenAiCompatibleConfig {
     pub base_url: Option<Url>,
+    pub models_url: Option<Url>,
 }
 
 impl Default for OpenAiCompatibleConfig {
@@ -26,6 +27,7 @@ impl Default for OpenAiCompatibleConfig {
             base_url: Some(
                 Url::parse(DEFAULT_BASE_URL).expect("default OpenAI-compatible URL is valid"),
             ),
+            models_url: None,
         }
     }
 }
@@ -104,7 +106,10 @@ pub(super) async fn translate(
 
 pub(super) async fn models(client: &Client, config: &OpenAiCompatibleConfig) -> Result<Vec<Model>> {
     let api_key = koharu_secrets::get("openai-compatible")?;
-    let request = client.get(endpoint(config.base_url.as_ref(), "models"));
+    let request = client.get(config.models_url.as_ref().map_or_else(
+        || endpoint(config.base_url.as_ref(), "models"),
+        ToString::to_string,
+    ));
     let request = match api_key {
         Some(api_key) => request.bearer_auth(api_key.expose_secret()),
         None => request,
@@ -219,6 +224,17 @@ struct ListedModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preserves_a_separate_model_catalog_url() {
+        let config: OpenAiCompatibleConfig = serde_json::from_value(serde_json::json!({
+            "base_url": "https://opencode.ai/inference/openai/v1",
+            "models_url": "https://opencode.ai/inference/v1/models",
+        }))
+        .unwrap();
+        let saved = serde_json::to_value(config).unwrap();
+        assert_eq!(saved["models_url"], "https://opencode.ai/inference/v1/models");
+    }
 
     #[test]
     fn endpoint_preserves_base_path() {

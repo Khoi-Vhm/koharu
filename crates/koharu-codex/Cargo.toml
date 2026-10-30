@@ -1,0 +1,27 @@
+[package]
+name = "koharu-codex"
+version.workspace = true
+edition.workspace = true
+description = "Shared OAuth authentication, model discovery, and streaming Codex inference."
+license.workspace = true
+authors.workspace = true
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+eventsource-stream = { workspace = true }
+futures = { workspace = true }
+koharu-runtime = { workspace = true }
+koharu-secrets = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+specta = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }

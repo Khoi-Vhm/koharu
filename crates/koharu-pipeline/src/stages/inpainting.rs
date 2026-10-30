@@ -102,24 +102,6 @@ impl StageProcessor for Processor {
         }
     }
 
-    fn skip(&self, input: &StageInput) -> Result<bool> {
-        if input.inpainting_mask.is_some() {
-            return Ok(false);
-        }
-        let source = AssetRole::new("source")?;
-        for entity in input.scene.children(input.page)? {
-            if input
-                .scene
-                .component::<RasterLayer>(entity)?
-                .is_some_and(|layer| layer.kind == RasterLayerKind::Cleanup)
-                && input.scene.asset(entity, &source)?.is_some()
-            {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-
     fn unload(&self) -> bool {
         self.model.unload()
     }
@@ -303,20 +285,7 @@ impl Model {
         if image.dimensions() != original.dimensions() || image.dimensions() != mask.dimensions() {
             bail!("inpainted image dimensions do not match page {page}");
         }
-        let mut overlay = if manual {
-            cleanup.unwrap_or_else(|| RgbaImage::new(image.width(), image.height()))
-        } else {
-            RgbaImage::new(image.width(), image.height())
-        };
-        for (x, y, target) in overlay.enumerate_pixels_mut() {
-            if mask.get_pixel(x, y)[0] < 127 {
-                continue;
-            }
-            let generated = image.get_pixel(x, y);
-            // Keep the complete cleanup mask opaque. Transparent texels next to
-            // edited pixels let linear canvas sampling reveal the artwork below.
-            *target = Rgba([generated[0], generated[1], generated[2], 255]);
-        }
+        let overlay = cleanup_overlay(cleanup, &image, &mask);
         let mut bytes = Cursor::new(Vec::new());
         let width = overlay.width();
         let height = overlay.height();
@@ -366,6 +335,18 @@ impl Model {
         )?;
         finish(edit)
     }
+}
+
+fn cleanup_overlay(cleanup: Option<RgbaImage>, image: &RgbaImage, mask: &GrayImage) -> RgbaImage {
+    let mut overlay = cleanup.unwrap_or_else(|| RgbaImage::new(image.width(), image.height()));
+    for (x, y, target) in overlay.enumerate_pixels_mut() {
+        if mask.get_pixel(x, y)[0] >= 127 {
+            let generated = image.get_pixel(x, y);
+            // Opaque mask pixels prevent linear sampling from revealing the artwork below.
+            *target = Rgba([generated[0], generated[1], generated[2], 255]);
+        }
+    }
+    overlay
 }
 
 #[derive(Clone, Debug)]
@@ -457,14 +438,10 @@ async fn prepare(input: &StageInput) -> Result<InpaintInput> {
     {
         bail!("cleanup layer dimensions do not match page {page}");
     }
-    let source = if input.inpainting_mask.is_some() {
-        if let Some(cleanup) = cleanup.as_ref() {
-            let mut composite = original.to_rgba8();
-            image::imageops::overlay(&mut composite, cleanup, 0, 0);
-            Arc::new(DynamicImage::ImageRgba8(composite))
-        } else {
-            original.clone()
-        }
+    let source = if let Some(cleanup) = cleanup.as_ref() {
+        let mut composite = original.to_rgba8();
+        image::imageops::overlay(&mut composite, cleanup, 0, 0);
+        Arc::new(DynamicImage::ImageRgba8(composite))
     } else {
         original.clone()
     };
@@ -488,6 +465,18 @@ async fn prepare(input: &StageInput) -> Result<InpaintInput> {
                 }
                 if role == "text-mask" {
                     text_mask = layer;
+                }
+            }
+        }
+    }
+    // Automatic reruns extend the overlay without repainting prior cleanup,
+    // including brush edits. An explicit brush mask may still revise those pixels.
+    if input.inpainting_mask.is_none() {
+        if let Some(cleanup) = cleanup.as_ref() {
+            for (x, y, pixel) in mask.enumerate_pixels_mut() {
+                if cleanup.get_pixel(x, y)[3] != 0 {
+                    *pixel = Luma([0]);
+                    text_mask.put_pixel(x, y, Luma([0]));
                 }
             }
         }
@@ -954,67 +943,84 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn automatic_inpainting_skips_committed_cleanup() {
+    async fn automatic_inpainting_extends_cleanup_without_repainting_existing_pixels() {
         let mut session = koharu_scene::Session::memory().await.unwrap();
         let mut page = None;
+        let source = DynamicImage::new_rgb8(8, 8);
+        let mask = DynamicImage::ImageLuma8(GrayImage::from_pixel(8, 8, Luma([255])));
+        let mut cleanup = RgbaImage::new(8, 8);
+        cleanup.put_pixel(3, 4, Rgba([10, 20, 30, 255]));
+        let cleanup = DynamicImage::ImageRgba8(cleanup);
+        let encode = |image: &DynamicImage| {
+            let mut bytes = Cursor::new(Vec::new());
+            image.write_to(&mut bytes, ImageFormat::Png).unwrap();
+            Arc::<[u8]>::from(bytes.into_inner())
+        };
         let patch = session
             .snapshot()
             .patch(|edit| {
-                let id = edit.add_page(
-                    koharu_scene::PageDraft::new("page", 8.0, 8.0),
-                    koharu_scene::At::End,
-                )?;
-                let cleanup = edit.add_entity(id, At::Start)?;
+                let id = edit.add_page(koharu_scene::PageDraft::new("page", 8.0, 8.0), At::End)?;
+                let layer = edit.add_entity(id, At::Start)?;
                 edit.set(
-                    cleanup,
+                    layer,
                     &RasterLayer {
                         origin: Origin::User,
-                        name: "Cleanup".to_owned(),
+                        name: "Cleanup".into(),
                         kind: RasterLayerKind::Cleanup,
                     },
                 )?;
-                edit.set_asset(
-                    cleanup,
-                    &AssetRole::new("source")?,
-                    AssetInput::new(
-                        Arc::<[u8]>::from([0]),
-                        "image/png",
-                        AssetMetadata {
-                            width: Some(8),
-                            height: Some(8),
-                            attributes: BTreeMap::new(),
-                        },
-                    ),
-                )?;
+                for (entity, role, image) in [
+                    (id, "source", &source),
+                    (id, "text-mask", &mask),
+                    (layer, "source", &cleanup),
+                ] {
+                    edit.set_asset(
+                        entity,
+                        &AssetRole::new(role)?,
+                        AssetInput::new(
+                            encode(image),
+                            "image/png",
+                            AssetMetadata {
+                                width: Some(8),
+                                height: Some(8),
+                                attributes: BTreeMap::new(),
+                            },
+                        ),
+                    )?;
+                }
                 page = Some(id);
                 Ok(())
             })
             .unwrap();
-        let snapshot = session.commit(patch).await.unwrap().snapshot;
-        let page = page.unwrap();
-        let automatic = StageInput::new(
-            snapshot.clone(),
-            page,
+        let scene = session.commit(patch).await.unwrap().snapshot;
+        let input = StageInput::new(
+            scene,
+            page.unwrap(),
             None,
             None,
             Arc::new(crate::ImageCache::default()),
             None,
         );
-        let manual = StageInput::new(
-            snapshot,
-            page,
-            None,
-            None,
-            Arc::new(crate::ImageCache::default()),
-            Some(crate::InpaintingMask {
-                page,
-                png: Arc::<[u8]>::from([]),
-            }),
+        let prepared = prepare(&input).await.unwrap();
+        assert_eq!(prepared.mask.get_pixel(3, 4), &Luma([0]));
+        assert_eq!(prepared.mask.get_pixel(0, 0), &Luma([255]));
+        assert_eq!(
+            prepared.image.to_rgba8().get_pixel(3, 4),
+            &Rgba([10, 20, 30, 255])
         );
-        let processor = Processor::new(InpaintingModel::LaMa {}, koharu_ml::Device::cpu()).unwrap();
+    }
 
-        assert!(processor.skip(&automatic).unwrap());
-        assert!(!processor.skip(&manual).unwrap());
+    #[test]
+    fn extending_cleanup_preserves_edits_and_paints_only_the_new_mask() {
+        let mut previous = RgbaImage::new(3, 1);
+        previous.put_pixel(0, 0, Rgba([10, 20, 30, 255]));
+        let generated = RgbaImage::from_pixel(3, 1, Rgba([200, 200, 200, 255]));
+        let mut mask = GrayImage::new(3, 1);
+        mask.put_pixel(1, 0, Luma([255]));
+        let overlay = super::cleanup_overlay(Some(previous), &generated, &mask);
+        assert_eq!(overlay.get_pixel(0, 0), &Rgba([10, 20, 30, 255]));
+        assert_eq!(overlay.get_pixel(1, 0), &Rgba([200, 200, 200, 255]));
+        assert_eq!(overlay.get_pixel(2, 0)[3], 0);
     }
 
     fn rectangle_region([left, top, right, bottom]: [u32; 4]) -> FlatFillRegion {

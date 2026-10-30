@@ -276,12 +276,68 @@ fn crop(source: &DynamicImage, geometry: &Geometry) -> Result<DynamicImage> {
     if right <= x || bottom <= y {
         bail!("geometry does not overlap the image");
     }
+    if let [a, b, c, d] = geometry.points.as_slice()
+        && ((a.y - b.y).abs() > 0.01
+            || (b.x - c.x).abs() > 0.01
+            || (c.y - d.y).abs() > 0.01
+            || (d.x - a.x).abs() > 0.01)
+    {
+        use imageproc::geometric_transformations::{Border, Interpolation, Projection, warp_into};
+        let edge = |a: &koharu_scene::Point, b: &koharu_scene::Point| (b.x - a.x).hypot(b.y - a.y);
+        let limit = f64::from(source.width()).hypot(f64::from(source.height()));
+        let width = edge(a, b).max(edge(d, c)).ceil().clamp(1.0, limit) as u32;
+        let height = edge(a, d).max(edge(b, c)).ceil().clamp(1.0, limit) as u32;
+        let from = [a, b, c, d].map(|p| ((p.x - f64::from(x)) as f32, (p.y - f64::from(y)) as f32));
+        let to = [
+            (0.0, 0.0),
+            (width as f32, 0.0),
+            (width as f32, height as f32),
+            (0.0, height as f32),
+        ];
+        if let Some(projection) = Projection::from_control_points(from, to) {
+            let crop = source.crop_imm(x, y, right - x, bottom - y).to_rgb8();
+            let mut output = image::RgbImage::new(width, height);
+            warp_into(
+                &crop,
+                projection,
+                Interpolation::Bilinear,
+                Border::Constant(image::Rgb([255, 255, 255])),
+                &mut output,
+            );
+            return Ok(DynamicImage::ImageRgb8(output));
+        }
+    }
     Ok(source.crop_imm(x, y, right - x, bottom - y))
 }
 
 #[cfg(test)]
 mod tests {
     use super::normalize_ocr_text;
+
+    #[test]
+    fn tilted_text_is_rectified_to_one_line_before_recognition() {
+        let mut image = image::RgbImage::from_pixel(20, 20, image::Rgb([0, 0, 255]));
+        let polygon =
+            [(3, 3), (13, 13), (11, 15), (1, 5)].map(|(x, y)| imageproc::point::Point::new(x, y));
+        imageproc::drawing::draw_polygon_mut(&mut image, &polygon, image::Rgb([255, 0, 0]));
+        let geometry = koharu_scene::Geometry {
+            origin: koharu_scene::Origin::User,
+            points: polygon
+                .map(|p| koharu_scene::Point {
+                    x: p.x.into(),
+                    y: p.y.into(),
+                })
+                .into(),
+        };
+        let output = super::crop(&image::DynamicImage::ImageRgb8(image), &geometry)
+            .unwrap()
+            .to_rgb8();
+        assert!(output.width() >= output.height() * 3);
+        assert_eq!(
+            output.get_pixel(output.width() / 2, output.height() / 2),
+            &image::Rgb([255, 0, 0])
+        );
+    }
 
     #[test]
     fn repeated_placeholder_glyphs_are_an_ellipsis() {
