@@ -4,7 +4,7 @@ use anyhow::Result;
 use koharu_pipeline::PipelineConfig;
 use koharu_renderer::TypesettingConfig;
 use koharu_secrets::ExposeSecret as _;
-use koharu_translator::{Language, Model, Provider, ProviderConfig, ProvidersConfig};
+use koharu_translator::{Language, Model, ProviderConfig, ProvidersConfig};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 
@@ -60,11 +60,11 @@ impl ProviderPreferences {
             .into_iter()
             .map(|config| {
                 let provider = config.provider();
-                let credential = if provider == Provider::Local {
-                    None
-                } else {
+                let credential = if provider.accepts_api_key() {
                     let key: &'static str = provider.into();
                     Some(CredentialInput::load(key)?)
+                } else {
+                    None
                 };
                 Ok(ProviderPreference {
                     name: provider.name().to_owned(),
@@ -82,13 +82,13 @@ impl ProviderPreferences {
         for entry in self.entries {
             let provider = entry.config.provider();
             match entry.credential {
-                None if provider == Provider::Local => {}
-                Some(credential) if provider != Provider::Local => {
+                None if !provider.accepts_api_key() => {}
+                Some(credential) if provider.accepts_api_key() => {
                     let key: &'static str = provider.into();
                     credentials.push((key, credential));
                 }
                 None => anyhow::bail!("missing credential input for {provider}"),
-                Some(_) => anyhow::bail!("local translation does not accept credentials"),
+                Some(_) => anyhow::bail!("{provider} does not accept API key credentials"),
             }
             configs.push(entry.config);
         }

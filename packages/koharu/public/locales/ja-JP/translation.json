@@ -36,6 +36,8 @@
     "properties": "プロパティ",
     "reasoning": "推論",
     "reasoningLevels": {
+      "none": "なし",
+      "minimal": "最小",
       "high": "高",
       "low": "低",
       "max": "最大",
@@ -265,6 +267,7 @@
   },
   "model": {
     "baseUrl": "ベース URL",
+    "modelsUrl": "モデル一覧のURL（任意）",
     "default": "既定",
     "instructions": "翻訳指示",
     "targetLanguage": "対象言語"

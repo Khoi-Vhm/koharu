@@ -76,6 +76,25 @@ export function ProviderPreferences({
                   }
                 />
               )}
+              {entry.config.provider === 'openai-compatible' && (
+                <TextField
+                  label={t('model.modelsUrl')}
+                  type='url'
+                  value={entry.config.settings.models_url ?? ''}
+                  onChange={(models_url) => {
+                    if (entry.config.provider !== 'openai-compatible') return
+                    onChange(
+                      replaceEntry(value, {
+                        ...entry,
+                        config: {
+                          ...entry.config,
+                          settings: { ...entry.config.settings, models_url: models_url || null },
+                        },
+                      }),
+                    )
+                  }}
+                />
+              )}
             </div>
           </PreferenceRow>
         ))}

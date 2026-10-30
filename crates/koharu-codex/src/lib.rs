@@ -1,20 +1,27 @@
+//! Shared Codex account and inference client.
+
 mod auth;
 mod catalog;
+mod control;
 mod protocol;
+mod reasoning;
 mod stream;
 mod token_store;
+mod tool;
 
 use anyhow::{Result, bail};
 use reqwest::{Client, StatusCode};
 use serde::Serialize;
 use specta::Type;
 
-use crate::{Control, Reasoning};
+pub use control::Control;
+pub use reasoning::Reasoning;
+pub use tool::{Tool, ToolCall};
 
 pub use auth::Account;
 use auth::Auth;
-pub(crate) use protocol::{Request, function_output, message, project_context};
-pub(crate) use stream::{Delta, Turn};
+pub use protocol::{Request, message};
+pub use stream::{Delta, Turn};
 
 const RESPONSES_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
 
@@ -23,6 +30,7 @@ pub struct CodexModel {
     pub id: String,
     pub name: String,
     pub reasoning: Vec<Reasoning>,
+    pub vision: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Type)]
@@ -45,11 +53,18 @@ pub struct Codex {
 
 impl Codex {
     pub fn new() -> Result<Self> {
+        static CLIENT: std::sync::OnceLock<Codex> = std::sync::OnceLock::new();
+        if let Some(client) = CLIENT.get() {
+            return Ok(client.clone());
+        }
         let client = koharu_runtime::http_client()?;
-        Ok(Self {
-            auth: Auth::new(client.clone()),
-            client,
-        })
+        // All consumers share the refresh lock for the same stored account.
+        Ok(CLIENT
+            .get_or_init(|| Self {
+                auth: Auth::new(client.clone()),
+                client,
+            })
+            .clone())
     }
 
     pub fn account(&self) -> Result<Option<Account>> {
@@ -64,8 +79,8 @@ impl Codex {
         self.auth.login_device(control, publish).await
     }
 
-    pub fn logout(&self) -> Result<()> {
-        self.auth.logout()
+    pub async fn logout(&self) -> Result<()> {
+        self.auth.logout().await
     }
 
     #[tracing::instrument(skip_all)]
@@ -73,12 +88,7 @@ impl Codex {
         catalog::models(&self.client, &self.auth).await
     }
 
-    pub(crate) async fn respond<F>(
-        &self,
-        request: &Request,
-        control: &Control,
-        publish: F,
-    ) -> Result<Turn>
+    pub async fn respond<F>(&self, request: &Request, control: &Control, publish: F) -> Result<Turn>
     where
         F: FnMut(Delta),
     {
@@ -86,7 +96,7 @@ impl Codex {
         let session = self.auth.session().await?;
         let mut response = self.send(request, &session, control).await?;
         if response.status() == StatusCode::UNAUTHORIZED {
-            let session = self.auth.force_refresh().await?;
+            let session = self.auth.force_refresh(&session.access).await?;
             response = self.send(request, &session, control).await?;
         }
         if !response.status().is_success() {

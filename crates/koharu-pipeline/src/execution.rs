@@ -167,8 +167,8 @@ impl<'a> Execution<'a> {
                 self.mark_complete(page, stage);
                 progress::emit(self.progress.as_ref(), Progress::Skipped { page, stage });
             }
-            StageOutcome::Patch(patch) => {
-                if !self.commit_patch(page, stage, patch).await? {
+            StageOutcome::Patch(output) => {
+                if !self.commit_patch(output).await? {
                     return Ok(());
                 }
                 self.mark_complete(page, stage);
@@ -188,11 +188,12 @@ impl<'a> Execution<'a> {
 
     async fn commit_patch(
         &mut self,
-        page: EntityId,
-        stage: Stage,
-        patch: koharu_scene::Patch,
+        mut output: StageOutput,
     ) -> std::result::Result<bool, PipelineError> {
-        let patch = patch
+        let page = output.page;
+        let stage = output.stage;
+        output.patch = output
+            .patch
             .rebase_on(&self.scene)
             .and_then(|patch| {
                 patch.validate_on(&self.scene)?;
@@ -204,9 +205,12 @@ impl<'a> Execution<'a> {
             return Ok(false);
         }
 
+        output
+            .validate_on(&self.scene)
+            .map_err(|error| PipelineError::new(ErrorKind::InvalidOutput, Some(stage), error))?;
         let next = self
             .committer
-            .commit(StageOutput { page, stage, patch })
+            .commit(output)
             .await
             .with_context(|| format!("failed to commit {stage} output for page {page}"))
             .map_err(|error| PipelineError::new(ErrorKind::Commit, Some(stage), error))?;

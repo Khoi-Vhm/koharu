@@ -163,7 +163,7 @@ const preferences: Preferences = {
         name: 'OpenAI-compatible',
         config: {
           provider: 'openai-compatible',
-          settings: { base_url: 'http://localhost:11434/v1' },
+          settings: { base_url: 'http://localhost:11434/v1', models_url: null },
         },
         credential: emptyCredential(),
       },
@@ -1471,6 +1471,30 @@ describe('greenfield editor', () => {
         configured.typesetting,
       ),
     )
+  })
+
+  it('saves a separate model list URL for a compatible provider', () => {
+    const onChange = vi.fn()
+    render(<ProviderPreferences value={preferences.providers} onChange={onChange} />)
+    fireEvent.change(screen.getByLabelText('Model list URL (optional)'), {
+      target: { value: 'https://opencode.ai/inference/v1/models' },
+    })
+    expect(onChange).toHaveBeenCalledWith({
+      entries: preferences.providers.entries.map((entry) =>
+        entry.config.provider === 'openai-compatible'
+          ? {
+              ...entry,
+              config: {
+                ...entry.config,
+                settings: {
+                  ...entry.config.settings,
+                  models_url: 'https://opencode.ai/inference/v1/models',
+                },
+              },
+            }
+          : entry,
+      ),
+    })
   })
 
   it('keeps a configured provider credential private and allows clearing it', async () => {

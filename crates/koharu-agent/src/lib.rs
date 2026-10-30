@@ -1,13 +1,10 @@
-//! Koharu's in-process, OAuth-backed Codex agent.
+//! Koharu project agent orchestration.
 
 mod agent;
-mod codex;
 mod config;
-mod control;
+mod context;
 mod tool;
 
 pub use agent::{Agent, Event, Message, Role, RunId, RunResult};
-pub use codex::{Account, Codex, CodexModel, LoginEvent};
-pub use config::{Config, Reasoning};
-pub use control::Control;
-pub use tool::{Host, Invocation, Tool, ToolCall, ToolImage};
+pub use config::Config;
+pub use tool::{Host, Invocation, ToolImage};

@@ -7,9 +7,11 @@ use specta::Type;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use koharu_codex::{Codex, CodexModel, Control, Delta, Request, ToolCall, message};
+
 use crate::{
-    Codex, CodexModel, Config, Control, Host, ToolCall,
-    codex::{Delta, Request, function_output, message, project_context},
+    Config, Host,
+    context::{function_output, project_context},
 };
 
 const INSTRUCTIONS: &str = r#"You are Koharu Agent, operating a manga translation project inside Koharu.
@@ -221,7 +223,7 @@ where
                 INSTRUCTIONS.to_owned(),
                 input.clone(),
                 tools.clone(),
-                reasoning,
+                (!model.reasoning.is_empty()).then_some(reasoning),
                 session.clone(),
             );
             let turn = self

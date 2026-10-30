@@ -3,6 +3,8 @@ mod inpainting;
 mod ocr;
 mod translation;
 
+pub(crate) use translation::TranslationInput;
+
 use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::Result;
@@ -111,8 +113,21 @@ impl Stages {
         self.processor(stage).load().await
     }
 
-    pub(crate) async fn process(&self, stage: Stage, input: StageInput) -> Result<Patch> {
-        self.processor(stage).process(input).await
+    pub(crate) async fn process(
+        &self,
+        stage: Stage,
+        input: StageInput,
+    ) -> Result<crate::StageOutput> {
+        let translation_input =
+            (stage == Stage::Translation).then(|| self.translation.validation(&input));
+        let page = input.page;
+        let patch = self.processor(stage).process(input).await?;
+        Ok(crate::StageOutput {
+            page,
+            stage,
+            patch,
+            translation_input,
+        })
     }
 
     pub(crate) fn unload(&self, stage: Stage) -> bool {
@@ -183,6 +198,18 @@ mod tests {
             .unwrap();
         let text = setup.add_text_content(page, koharu_scene::At::End).unwrap();
         setup
+            .add_text_layer(
+                page,
+                koharu_scene::At::End,
+                text,
+                &koharu_scene::TextLayout {
+                    origin: koharu_scene::Origin::User,
+                    kind: koharu_scene::TextLayoutKind::Paragraph,
+                    angle_degrees: None,
+                },
+            )
+            .unwrap();
+        setup
             .set(
                 text,
                 &koharu_scene::SourceText {
@@ -242,6 +269,16 @@ mod tests {
         let image_patch = image_edit.finish().unwrap();
 
         let image_first = base.preview([&image_patch]).unwrap();
+        let input = StageInput::new(
+            base.clone(),
+            page,
+            None,
+            None,
+            Arc::new(ImageCache::default()),
+            None,
+        );
+        let validation = TranslationInput::new(&input, &crate::TranslationConfig::default());
+        validation.validate_on(&image_first).unwrap();
         assert!(text_patch.rebase_on(&image_first).is_ok());
         let text_first = base.preview([&text_patch]).unwrap();
         assert!(image_patch.rebase_on(&text_first).is_ok());
@@ -258,6 +295,7 @@ mod tests {
             })
             .unwrap();
         let changed_source = base.preview([&changed_source]).unwrap();
+        assert!(validation.validate_on(&changed_source).is_err());
         assert!(text_patch.rebase_on(&changed_source).is_err());
     }
 }

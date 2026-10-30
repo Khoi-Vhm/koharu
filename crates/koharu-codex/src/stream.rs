@@ -9,15 +9,15 @@ use crate::{Control, ToolCall};
 
 const MAX_STREAM_BYTES: usize = 16 * 1024 * 1024;
 
-pub(crate) enum Delta {
+pub enum Delta {
     Text(String),
     Reasoning(String),
 }
 
-pub(crate) struct Turn {
-    pub(crate) output: Vec<Value>,
-    pub(crate) calls: Vec<ToolCall>,
-    pub(crate) text: String,
+pub struct Turn {
+    pub output: Vec<Value>,
+    pub calls: Vec<ToolCall>,
+    pub text: String,
 }
 
 pub(super) async fn read<F>(
@@ -149,4 +149,53 @@ fn provider_error(value: &Value) -> String {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+
+    async fn response(body: &'static str) -> reqwest::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).await.unwrap();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
+        });
+        reqwest::Client::new()
+            .get(format!("http://{address}"))
+            .send()
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn reads_completed_translation_and_rejects_partial_streams() {
+        let completed = response(concat!(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n",
+        ))
+        .await;
+        let turn = read(completed, &Control::default(), |_| {}).await.unwrap();
+        assert_eq!(turn.text, "hello");
+        assert!(turn.calls.is_empty());
+
+        for body in [
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+            "data: {\"type\":\"response.incomplete\",\"message\":\"interrupted\"}\n\n",
+            "data: {\"type\":\"response.failed\",\"message\":\"quota\"}\n\n",
+        ] {
+            assert!(
+                read(response(body).await, &Control::default(), |_| {})
+                    .await
+                    .is_err()
+            );
+        }
+    }
 }

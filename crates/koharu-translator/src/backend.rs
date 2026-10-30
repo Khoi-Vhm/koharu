@@ -18,6 +18,26 @@ pub struct TranslationRequest {
     pub instructions: Option<String>,
     pub context: Vec<TranslationContext>,
     pub image: Option<Arc<DynamicImage>>,
+    /// Validated relationship memory from preceding pages, or current-page analysis.
+    pub dialogue: Option<String>,
+    /// Source-image polygons indexed like `segments`; empty for text-only callers.
+    pub regions: Vec<Vec<[f64; 2]>>,
+    pub(crate) task: TranslationTask,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub(crate) enum TranslationTask {
+    #[default]
+    Translate,
+    Analysis,
+    Review(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranslationResult {
+    pub provider: &'static str,
+    pub translations: Vec<String>,
+    pub dialogue: Option<String>,
 }
 
 impl TranslationRequest {
@@ -33,6 +53,9 @@ impl TranslationRequest {
             instructions: None,
             context: Vec::new(),
             image: None,
+            dialogue: None,
+            regions: Vec::new(),
+            task: TranslationTask::Translate,
         }
     }
 
@@ -75,6 +98,10 @@ impl TranslationRequest {
             (u64::from(width) * u64::from(MAX_IMAGE_DIMENSION) / u64::from(longest)).max(1) as u32;
         let resized_height =
             (u64::from(height) * u64::from(MAX_IMAGE_DIMENSION) / u64::from(longest)).max(1) as u32;
+        for point in self.regions.iter_mut().flatten() {
+            point[0] *= f64::from(resized_width) / f64::from(width);
+            point[1] *= f64::from(resized_height) / f64::from(height);
+        }
         let source = image.to_rgb8();
         let mut resized = RgbImage::new(resized_width, resized_height);
         Resizer::new()
@@ -135,5 +162,20 @@ impl TranslationContext {
             source: source.into(),
             translation: translation.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resizes_regions_with_the_attached_image() {
+        let mut request = TranslationRequest::new(["hello"], Language::Vietnamese)
+            .with_image(Arc::new(DynamicImage::new_rgb8(4096, 2)));
+        request.regions = vec![vec![[2048.0, 1.0], [4096.0, 2.0]]];
+        request.prepare_image().unwrap();
+        assert_eq!(request.image.as_ref().unwrap().width(), 2048);
+        assert_eq!(request.regions[0], [[1024.0, 0.5], [2048.0, 1.0]]);
     }
 }

@@ -4631,12 +4631,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.23.1",
- "eventsource-stream",
- "futures",
+ "koharu-codex",
  "koharu-config",
- "koharu-runtime",
- "koharu-secrets",
- "reqwest",
  "serde",
  "serde_json",
  "specta",
@@ -4658,6 +4654,7 @@ dependencies = [
  "hayro",
  "image",
  "koharu-agent",
+ "koharu-codex",
  "koharu-desktop",
  "koharu-epub",
  "koharu-ml",
@@ -4727,6 +4724,25 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "koharu-codex"
+version = "0.83.5"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "eventsource-stream",
+ "futures",
+ "koharu-runtime",
+ "koharu-secrets",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "specta",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4857,6 +4873,7 @@ dependencies = [
  "anyhow",
  "arc-swap",
  "async-trait",
+ "blake3",
  "clap",
  "futures",
  "image",
@@ -4869,7 +4886,9 @@ dependencies = [
  "koharu-translator",
  "nvml-wrapper",
  "rayon",
+ "revision",
  "serde",
+ "serde_json",
  "specta",
  "strum",
  "sysinfo 0.39.6",
@@ -5068,6 +5087,7 @@ dependencies = [
  "futures",
  "image",
  "indoc",
+ "koharu-codex",
  "koharu-config",
  "koharu-ml",
  "koharu-runtime",
@@ -5082,6 +5102,7 @@ dependencies = [
  "tokio-rayon",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]

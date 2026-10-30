@@ -3,7 +3,8 @@ mod host;
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context as _, Result, anyhow};
-use koharu_agent::{Account, Agent, Codex, CodexModel, Config, Control, Event, LoginEvent, RunId};
+use koharu_agent::{Agent, Config, Event, RunId};
+use koharu_codex::{Account, Codex, CodexModel, Control, LoginEvent};
 use parking_lot::Mutex;
 use serde::Serialize;
 use specta::Type;
@@ -139,7 +140,7 @@ pub(crate) async fn logout_agent(
     state: State<'_, AgentState>,
 ) -> std::result::Result<AgentStatus, Error> {
     state.reset().await;
-    state.agent.codex().logout()?;
+    state.agent.codex().logout().await?;
     Ok(state.status().await?)
 }
 

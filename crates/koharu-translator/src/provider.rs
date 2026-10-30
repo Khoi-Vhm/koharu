@@ -6,9 +6,9 @@ use strum::{Display, EnumIter, EnumString, IntoStaticStr, VariantArray};
 use crate::{
     local::LocalConfig,
     remote::{
-        CaiyunConfig, ClaudeConfig, DeepLConfig, DeepSeekConfig, GeminiConfig, GoogleCloudConfig,
-        GrokConfig, LmStudioConfig, MiniMaxConfig, OpenAiCompatibleConfig, OpenAiConfig,
-        OpenRouterConfig,
+        CaiyunConfig, ClaudeConfig, CodexConfig, DeepLConfig, DeepSeekConfig, GeminiConfig,
+        GoogleCloudConfig, GrokConfig, LmStudioConfig, MiniMaxConfig, OpenAiCompatibleConfig,
+        OpenAiConfig, OpenRouterConfig,
     },
 };
 
@@ -19,6 +19,7 @@ macro_rules! define_providers {
             name: $name:literal,
             field: $field:ident,
             config: $config:ty,
+            api_key: $api_key:literal,
         }
     )+) => {
         #[derive(
@@ -46,6 +47,13 @@ macro_rules! define_providers {
         }
 
         impl Provider {
+            #[must_use]
+            pub const fn accepts_api_key(self) -> bool {
+                match self {
+                    $(Self::$variant => $api_key,)+
+                }
+            }
+
             #[must_use]
             pub const fn name(self) -> &'static str {
                 match self {
@@ -120,78 +128,117 @@ define_providers! {
         name: "Local",
         field: local,
         config: LocalConfig,
+        api_key: false,
+    }
+    Codex {
+        id: "codex",
+        name: "Codex",
+        field: codex,
+        config: CodexConfig,
+        api_key: false,
     }
     OpenAi {
         id: "openai",
         name: "OpenAI",
         field: openai,
         config: OpenAiConfig,
+        api_key: true,
     }
     Gemini {
         id: "gemini",
         name: "Gemini",
         field: gemini,
         config: GeminiConfig,
+        api_key: true,
     }
     Claude {
         id: "claude",
         name: "Claude",
         field: claude,
         config: ClaudeConfig,
+        api_key: true,
     }
     Grok {
         id: "grok",
         name: "Grok",
         field: grok,
         config: GrokConfig,
+        api_key: true,
     }
     MiniMax {
         id: "minimax",
         name: "MiniMax",
         field: minimax,
         config: MiniMaxConfig,
+        api_key: true,
     }
     DeepSeek {
         id: "deepseek",
         name: "DeepSeek",
         field: deepseek,
         config: DeepSeekConfig,
+        api_key: true,
     }
     OpenAiCompatible {
         id: "openai-compatible",
         name: "OpenAI-compatible",
         field: openai_compatible,
         config: OpenAiCompatibleConfig,
+        api_key: true,
     }
     OpenRouter {
         id: "openrouter",
         name: "OpenRouter",
         field: openrouter,
         config: OpenRouterConfig,
+        api_key: true,
     }
     LmStudio {
         id: "lm-studio",
         name: "LM Studio",
         field: lm_studio,
         config: LmStudioConfig,
+        api_key: true,
     }
     DeepL {
         id: "deepl",
         name: "DeepL",
         field: deepl,
         config: DeepLConfig,
+        api_key: true,
     }
     GoogleCloudTranslation {
         id: "google-cloud-translation",
         name: "Google Cloud Translation",
         field: google_cloud_translation,
         config: GoogleCloudConfig,
+        api_key: true,
     }
     Caiyun {
         id: "caiyun",
         name: "Caiyun",
         field: caiyun,
         config: CaiyunConfig,
+        api_key: true,
+    }
+}
+
+impl Provider {
+    pub(crate) const fn supports_dialogue_analysis(self) -> bool {
+        match self {
+            Self::DeepL | Self::GoogleCloudTranslation | Self::Caiyun => false,
+            Self::Local
+            | Self::Codex
+            | Self::OpenAi
+            | Self::Gemini
+            | Self::Claude
+            | Self::Grok
+            | Self::MiniMax
+            | Self::DeepSeek
+            | Self::OpenAiCompatible
+            | Self::OpenRouter
+            | Self::LmStudio => true,
+        }
     }
 }
 

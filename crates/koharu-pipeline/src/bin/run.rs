@@ -55,6 +55,7 @@ struct SessionCommitter<'a>(&'a mut Session);
 #[async_trait::async_trait]
 impl Committer for SessionCommitter<'_> {
     async fn commit(&mut self, output: StageOutput) -> Result<koharu_scene::Snapshot> {
+        output.validate_on(&self.0.snapshot())?;
         Ok(self.0.commit(output.patch).await?.snapshot)
     }
 }

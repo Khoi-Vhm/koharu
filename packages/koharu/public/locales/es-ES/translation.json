@@ -36,6 +36,8 @@
     "properties": "Propiedades",
     "reasoning": "Razonamiento",
     "reasoningLevels": {
+      "none": "Ninguno",
+      "minimal": "Mínimo",
       "high": "Alto",
       "low": "Bajo",
       "max": "Máximo",
@@ -265,6 +267,7 @@
   },
   "model": {
     "baseUrl": "URL base",
+    "modelsUrl": "URL de la lista de modelos (opcional)",
     "default": "Predeterminado",
     "instructions": "Instrucciones",
     "targetLanguage": "Idioma de destino"

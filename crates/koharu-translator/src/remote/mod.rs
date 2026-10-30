@@ -1,5 +1,6 @@
 mod caiyun;
 mod claude;
+mod codex;
 mod deepl;
 mod deepseek;
 mod gemini;
@@ -18,6 +19,7 @@ use serde::de::DeserializeOwned;
 
 pub use caiyun::CaiyunConfig;
 pub use claude::ClaudeConfig;
+pub use codex::CodexConfig;
 pub use deepl::DeepLConfig;
 pub use deepseek::DeepSeekConfig;
 pub use gemini::GeminiConfig;
@@ -48,6 +50,7 @@ pub(crate) async fn translate(
             .with_context(|| format!("{} requires a selected model", selection.provider))
     };
     match selection.provider {
+        Provider::Codex => Ok(codex::translate(model()?, generation, request).await?),
         Provider::OpenAi => {
             openai::translate(client, &providers.openai, model()?, generation, request).await
         }
@@ -95,6 +98,7 @@ pub(crate) async fn translate(
 pub(crate) async fn models(client: &Client, providers: &ProvidersConfig) -> Vec<Model> {
     let mut models = Vec::new();
     let pending: Vec<BoxFuture<'_, Result<Vec<Model>>>> = vec![
+        codex::models().boxed(),
         openai::models(client).boxed(),
         gemini::models(client).boxed(),
         claude::models(client).boxed(),

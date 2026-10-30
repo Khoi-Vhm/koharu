@@ -3,7 +3,8 @@ use std::{future::Future, pin::Pin, sync::OnceLock};
 use anyhow::{Context as _, Result, anyhow, bail};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use koharu_agent::{Control, Host, Invocation, Tool, ToolCall};
+use koharu_agent::{Host, Invocation};
+use koharu_codex::{Control, Tool, ToolCall};
 use koharu_desktop::{Desktop, Frame};
 use koharu_pipeline::{Committer, Operation, RunStatus, Scope, Stage, StageOutput, StopToken};
 use koharu_scene::{Commit, EntityId, Snapshot};
@@ -461,6 +462,7 @@ impl Committer for AgentCommitter {
             let current = self.host.handle.state::<CurrentProject>();
             let mut current = current.project.lock().await;
             let project = current.as_mut().context("no project is open")?;
+            output.validate_on(&project.snapshot())?;
             let Some(commit) = project.commit_rebased(output.patch).await? else {
                 return Ok(project.snapshot());
             };

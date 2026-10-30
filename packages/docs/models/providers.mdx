@@ -8,12 +8,12 @@ The translation picker combines local and hosted backends. A selection records t
 
 ## Available connections
 
-| Connection          | Providers                                                                |
-| ------------------- | ------------------------------------------------------------------------ |
-| Local inference     | GGUF models through llama.cpp                                            |
-| Hosted models       | OpenAI, Gemini, Claude, Grok, MiniMax, DeepSeek, OpenRouter |
-| Compatible servers  | LM Studio and OpenAI-compatible endpoints                                |
-| Machine translation | DeepL, Google Cloud Translation, Caiyun                                  |
+| Connection          | Providers                                                          |
+| ------------------- | ------------------------------------------------------------------ |
+| Local inference     | GGUF models through llama.cpp                                      |
+| Hosted models       | Codex, OpenAI, Gemini, Claude, Grok, MiniMax, DeepSeek, OpenRouter |
+| Compatible servers  | LM Studio and OpenAI-compatible endpoints                          |
+| Machine translation | DeepL, Google Cloud Translation, Caiyun                            |
 
 Each provider owns its endpoint defaults, request mapping, and model discovery. Available models can change independently of these docs.
 
@@ -40,6 +40,25 @@ Each provider owns its endpoint defaults, request mapping, and model discovery. 
     processing a chapter.
   </Step>
 </Steps>
+
+## Codex account
+
+[Sign in with Codex in the Agent panel](/agent/setup), then choose a Codex model in the translation picker.
+Codex uses that ChatGPT authorization instead of an API key. The Agent and translator have
+independent model selections and share the same account; signing out affects both.
+
+## OpenCode Zen / Console
+
+Use **OpenAI-compatible** in **Settings → Providers** with your OpenCode API key:
+
+- **Base URL:** `https://opencode.ai/inference/openai/v1`
+- **Model list URL (optional):** `https://opencode.ai/inference/v1/models`
+
+OpenCode serves its model catalog separately from its chat endpoint. For other compatible
+servers, leave the model list URL empty to use `<base URL>/models`. Reopen the translation
+picker after saving to refresh discovery. Turn off **Vision** for text-only models.
+Free-tier chat models require the OpenCode client; use a supported paid model in Koharu.
+See [OpenCode's model documentation](https://opencode.ai/v2/docs/console/models/).
 
 ## Credentials and privacy
 

@@ -11,6 +11,7 @@ publish.workspace = true
 license.workspace = true
 
 [dependencies]
+koharu-codex = { workspace = true }
 alphanumeric-sort = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

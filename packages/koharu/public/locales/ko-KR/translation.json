@@ -36,6 +36,8 @@
     "properties": "속성",
     "reasoning": "추론",
     "reasoningLevels": {
+      "none": "없음",
+      "minimal": "최소",
       "high": "높음",
       "low": "낮음",
       "max": "최대",
@@ -265,6 +267,7 @@
   },
   "model": {
     "baseUrl": "기본 URL",
+    "modelsUrl": "모델 목록 URL (선택 사항)",
     "default": "기본값",
     "instructions": "번역 지침",
     "targetLanguage": "대상 언어"

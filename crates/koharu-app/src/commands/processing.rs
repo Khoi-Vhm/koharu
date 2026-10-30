@@ -179,6 +179,7 @@ pub(crate) async fn process(
                     let projects = self.handle.state::<CurrentProject>();
                     let mut projects = projects.project.lock().await;
                     let project = projects.as_mut().context("no project is open")?;
+                    output.validate_on(&project.snapshot())?;
                     let Some(commit) = project.commit_rebased(output.patch).await? else {
                         return Ok(project.snapshot());
                     };

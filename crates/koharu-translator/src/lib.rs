@@ -1,6 +1,7 @@
 //! Translation through local and hosted providers.
 
 mod backend;
+mod dialogue;
 mod error;
 mod language;
 mod local;
@@ -16,7 +17,7 @@ use koharu_ml::Device;
 use error::{Error, Result};
 use local::LocalTranslator;
 
-pub use backend::{TranslationContext, TranslationRequest};
+pub use backend::{TranslationContext, TranslationRequest, TranslationResult};
 pub use language::Language;
 pub use model::{GenerationConfig, Model, ModelSelection, Quantization};
 pub(crate) use model::{ModelGeneration, QuantizationDefinition, display_name};
@@ -101,11 +102,15 @@ impl Translator {
         selection: &ModelSelection,
         generation: GenerationConfig,
         mut request: TranslationRequest,
-    ) -> anyhow::Result<(&'static str, Vec<String>)> {
+    ) -> anyhow::Result<TranslationResult> {
         let provider = selection.provider;
         let provider_id: &'static str = provider.into();
         if request.segments.is_empty() {
-            return Ok((provider_id, request.segments));
+            return Ok(TranslationResult {
+                provider: provider_id,
+                translations: request.segments,
+                dialogue: None,
+            });
         }
 
         let generation = generation.for_model(selection);
@@ -116,6 +121,27 @@ impl Translator {
             request.remove_image();
         }
 
+        let contextual = request.target_language == Language::Vietnamese
+            && provider.supports_dialogue_analysis();
+        let output = dialogue::translate(request, contextual, |request| async move {
+            self.translate_once(selection, generation, request).await
+        })
+        .await?;
+        Ok(TranslationResult {
+            provider: provider_id,
+            translations: output.translations,
+            dialogue: output.dialogue,
+        })
+    }
+
+    async fn translate_once(
+        &self,
+        selection: &ModelSelection,
+        generation: GenerationConfig,
+        request: TranslationRequest,
+    ) -> anyhow::Result<Vec<String>> {
+        let provider = selection.provider;
+        let provider_id = provider.into();
         let expected = request.segments.len();
         let translated = if provider == Provider::Local {
             self.local(selection)
@@ -134,7 +160,7 @@ impl Translator {
             }
             .into());
         }
-        Ok((provider_id, translated))
+        Ok(translated)
     }
 
     #[tracing::instrument(skip_all)]

@@ -8,11 +8,17 @@ const ACTIVE_KEY: &str = "agent_codex_active";
 const PREFIX: &str = "agent_codex";
 const CHUNK_UTF16_UNITS: usize = 1000;
 
+// Loading a generation and deleting its chunks must not interleave in-process.
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct TokenStore;
 
 impl TokenStore {
     pub(super) fn load(self) -> Result<Option<Tokens>> {
+        let _store = STORE_LOCK
+            .lock()
+            .map_err(|_| anyhow!("Codex credential store lock poisoned"))?;
         let Some(generation) = get(ACTIVE_KEY)? else {
             return Ok(None);
         };
@@ -36,6 +42,9 @@ impl TokenStore {
     }
 
     pub(super) fn store(self, tokens: &Tokens) -> Result<()> {
+        let _store = STORE_LOCK
+            .lock()
+            .map_err(|_| anyhow!("Codex credential store lock poisoned"))?;
         let previous = get(ACTIVE_KEY)?;
         let generation = Uuid::new_v4().simple().to_string();
         self.set_field(&generation, "access", &tokens.access)?;
@@ -60,6 +69,9 @@ impl TokenStore {
     }
 
     pub(super) fn delete(self) -> Result<()> {
+        let _store = STORE_LOCK
+            .lock()
+            .map_err(|_| anyhow!("Codex credential store lock poisoned"))?;
         let active = get(ACTIVE_KEY)?;
         koharu_secrets::delete(ACTIVE_KEY)?;
         if let Some(active) = active {
