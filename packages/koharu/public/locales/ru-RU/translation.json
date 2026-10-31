@@ -301,7 +301,8 @@
     "rename": "Переименовать",
     "renameDescription": "Выберите новое имя для страницы.",
     "renameTitle": "Переименовать страницу",
-    "selected": "Выбрано: {{count}}"
+    "selected": "Выбрано: {{count}}",
+    "sortByFilename": "Сортировать по имени файла"
   },
   "outputPicker": {
     "instructions": "Инструкции по переводу",

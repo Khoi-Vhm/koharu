@@ -479,6 +479,36 @@ describe('greenfield editor', () => {
     expect(screen.queryByText('01')).not.toBeInTheDocument()
   })
 
+  it('sorts the project even with a page filter and preserves selection', async () => {
+    installProject()
+    const user = userEvent.setup()
+    const pages: PageSummary[] = ['chapter 10.png', 'chapter 2.png'].map((label, index) => ({
+      id: index === 0 ? 'page' : 'page-2',
+      label,
+      size: { width: 1000, height: 1500 },
+      source_asset: null,
+      layer_count: 0,
+    }))
+    queryClient.setQueryData(pagesKey, pages)
+    vi.spyOn(commands, 'sortPagesByFilename').mockResolvedValue(null)
+    vi.spyOn(commands, 'getPages').mockResolvedValue([pages[1]!, pages[0]!])
+    vi.spyOn(commands, 'getProject').mockResolvedValue({
+      name: 'Book',
+      revision: 2,
+      active_page: 'page',
+      can_undo: true,
+      can_redo: false,
+    })
+    render(<PageRail />)
+    await user.type(screen.getByRole('textbox', { name: 'Filter pages' }), 'chapter 2')
+    await user.click(screen.getByRole('button', { name: 'Sort by filename' }))
+
+    await waitFor(() => expect(queryClient.getQueryData(pagesKey)).toEqual([pages[1], pages[0]]))
+    expect(commands.sortPagesByFilename).toHaveBeenCalledWith()
+    expect(useKoharuStore.getState().selectedPages).toEqual(['page'])
+    expect(queryClient.getQueryData<ProjectInfo>(projectKey)?.active_page).toBe('page')
+  })
+
   it('keeps rapid page switches on the latest native selection', async () => {
     installProject()
     const pages = [

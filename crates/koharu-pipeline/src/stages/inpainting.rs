@@ -507,6 +507,9 @@ async fn prepare(input: &StageInput) -> Result<InpaintInput> {
 
 const TILE_SIZE: u32 = 512;
 const TILE_CONTEXT: u32 = 128;
+// MPS retains graphs by input shape. Bucket crops using real context pixels
+// to bound shape diversity across pages (upstream PR #1296).
+const TILE_BUCKET: u32 = 256;
 const UNIFORM_BACKGROUND_MIN_PIXELS: usize = 16;
 const FLAT_FILL_EDGE_MARGIN: f32 = 3.0;
 
@@ -713,12 +716,26 @@ fn bounds_area([left, top, right, bottom]: [u32; 4]) -> u64 {
 }
 
 fn expand_bounds([left, top, right, bottom]: [u32; 4], width: u32, height: u32) -> [u32; 4] {
-    [
+    let (left, right) = bucket_span(
         left.saturating_sub(TILE_CONTEXT),
-        top.saturating_sub(TILE_CONTEXT),
         right.saturating_add(TILE_CONTEXT).min(width),
+        width,
+    );
+    let (top, bottom) = bucket_span(
+        top.saturating_sub(TILE_CONTEXT),
         bottom.saturating_add(TILE_CONTEXT).min(height),
-    ]
+        height,
+    );
+    [left, top, right, bottom]
+}
+
+/// Widens the span to a bucket size while preserving context and page bounds.
+fn bucket_span(start: u32, end: u32, limit: u32) -> (u32, u32) {
+    let length = (end - start).next_multiple_of(TILE_BUCKET).min(limit);
+    let start = start
+        .saturating_sub((length - (end - start)) / 2)
+        .min(limit - length);
+    (start, start + length)
 }
 
 fn component_bounds_in(
@@ -1155,6 +1172,28 @@ mod tests {
     }
 
     #[test]
+    fn expanded_crops_bucket_shapes_without_losing_context() {
+        for (core, width, height) in [
+            ([400, 400, 450, 450], 2000, 2000),
+            ([0, 0, 40, 40], 2000, 2000),
+            ([1950, 1150, 2000, 1200], 2000, 1200),
+            ([100, 100, 150, 150], 150, 150),
+            ([128, 128, 640, 640], 1000, 1000),
+        ] {
+            let [left, top, right, bottom] = expand_bounds(core, width, height);
+            assert!(left <= core[0].saturating_sub(TILE_CONTEXT));
+            assert!(top <= core[1].saturating_sub(TILE_CONTEXT));
+            assert!(right >= core[2].saturating_add(TILE_CONTEXT).min(width));
+            assert!(bottom >= core[3].saturating_add(TILE_CONTEXT).min(height));
+            assert!(right <= width && bottom <= height);
+            assert!((right - left).is_multiple_of(256) || right - left == width);
+            assert!((bottom - top).is_multiple_of(256) || bottom - top == height);
+            assert!(right - left <= TILE_SIZE + 2 * TILE_CONTEXT);
+            assert!(bottom - top <= TILE_SIZE + 2 * TILE_CONTEXT);
+        }
+    }
+
+    #[test]
     fn oversized_component_tiles_mask_their_continuation_context() {
         let mut mask = GrayImage::new(1000, 300);
         for y in 100..120 {
@@ -1210,8 +1249,10 @@ mod tests {
             &[],
             |tile, _| {
                 calls += 1;
-                assert!(tile.width() <= TILE_CONTEXT * 2 + 1);
-                assert!(tile.height() <= TILE_CONTEXT * 2 + 1);
+                assert!(tile.width().is_multiple_of(TILE_BUCKET));
+                assert!(tile.height().is_multiple_of(TILE_BUCKET));
+                assert!(tile.width() <= TILE_SIZE + TILE_CONTEXT * 2);
+                assert!(tile.height() <= TILE_SIZE + TILE_CONTEXT * 2);
                 Ok(DynamicImage::ImageRgb8(RgbImage::from_pixel(
                     tile.width(),
                     tile.height(),

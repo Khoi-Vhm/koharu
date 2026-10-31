@@ -78,6 +78,7 @@ pub fn bindings() -> tauri_specta::Builder<tauri_runtime_cef::CefRuntime> {
             editing::rename_page,
             editing::delete_pages,
             editing::move_page,
+            editing::sort_pages_by_filename,
             editing::set_source_text,
             editing::set_translation,
             editing::set_typography,

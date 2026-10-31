@@ -3,6 +3,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { observeElementRect, useVirtualizer } from '@tanstack/react-virtual'
 import {
+  ArrowDownAZ,
   FilePlus2,
   FolderOpen,
   LoaderCircle,
@@ -79,6 +80,7 @@ export function PageRail() {
   const selectionRequest = useRef(0)
   const intentPrefetch = useRef<IntentPrefetchState | null>(null)
   const [dragged, setDragged] = useState<string | null>(null)
+  const [sorting, setSorting] = useState(false)
   const [query, setQuery] = useState('')
   const [renaming, setRenaming] = useState<PageSummary | null>(null)
   const [renameValue, setRenameValue] = useState('')
@@ -205,6 +207,17 @@ export function PageRail() {
       })
       .catch(() => undefined)
 
+  const sortPages = () => {
+    setSorting(true)
+    void call(commands.sortPagesByFilename)
+      .then(() => {
+        anchor.current = null
+        return refresh(projectKey, pagesKey)
+      })
+      .catch(() => undefined)
+      .finally(() => setSorting(false))
+  }
+
   const openRename = (page: PageSummary) => {
     setRenaming(page)
     setRenameValue(page.label)
@@ -249,6 +262,24 @@ export function PageRail() {
               {t('navigator.selected', { count: selected.length })}
             </span>
           )}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant='ghost'
+                  size='icon-xs'
+                  className='ml-auto shrink-0 text-muted-foreground'
+                  aria-label={t('navigator.sortByFilename')}
+                  aria-busy={sorting}
+                  disabled={pages.length < 2 || importing || sorting}
+                  onClick={sortPages}
+                />
+              }
+            >
+              {sorting ? <LoaderCircle className='animate-spin' /> : <ArrowDownAZ />}
+            </TooltipTrigger>
+            <TooltipContent>{t('navigator.sortByFilename')}</TooltipContent>
+          </Tooltip>
         </header>
 
         {pages.length > 0 && (

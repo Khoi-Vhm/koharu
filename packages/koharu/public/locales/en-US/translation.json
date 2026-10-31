@@ -301,7 +301,8 @@
     "rename": "Rename",
     "renameDescription": "Choose a new name for this page.",
     "renameTitle": "Rename page",
-    "selected": "{{count}} selected"
+    "selected": "{{count}} selected",
+    "sortByFilename": "Sort by filename"
   },
   "outputPicker": {
     "instructions": "Translation instructions",

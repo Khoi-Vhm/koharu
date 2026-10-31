@@ -301,7 +301,8 @@
     "rename": "Cambiar nombre",
     "renameDescription": "Elige un nombre nuevo para esta página.",
     "renameTitle": "Cambiar nombre de página",
-    "selected": "{{count}} seleccionadas"
+    "selected": "{{count}} seleccionadas",
+    "sortByFilename": "Ordenar por nombre de archivo"
   },
   "outputPicker": {
     "instructions": "Instrucciones de traducción",

@@ -301,7 +301,8 @@
     "rename": "重新命名",
     "renameDescription": "為此頁面選擇新名稱。",
     "renameTitle": "重新命名頁面",
-    "selected": "已選擇 {{count}}"
+    "selected": "已選擇 {{count}}",
+    "sortByFilename": "依檔案名稱排序"
   },
   "outputPicker": {
     "instructions": "翻譯指示",

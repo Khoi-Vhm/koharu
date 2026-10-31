@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::Arc,
+};
 
 use bytes::Bytes;
 
@@ -74,6 +78,13 @@ impl Session {
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
         self.current.clone()
+    }
+
+    /// Releases undo operations and blob leases no longer reachable from UI history.
+    pub fn retain_history(&mut self, revisions: impl IntoIterator<Item = crate::Revision>) {
+        let revisions = revisions.into_iter().collect::<BTreeSet<_>>();
+        self.history
+            .retain(|revision, _| revisions.contains(revision));
     }
 
     #[tracing::instrument(level = "info", skip_all, fields(project = %self.project_id(), base = %patch.base_revision))]

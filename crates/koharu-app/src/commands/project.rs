@@ -380,6 +380,27 @@ impl Project {
         self.commit(patch).await
     }
 
+    pub(crate) async fn sort_pages_by_filename(&mut self) -> Result<Commit> {
+        let snapshot = self.snapshot();
+        let mut pages = snapshot
+            .pages()
+            .map(|page| Ok((page.id(), page.page()?.label)))
+            .collect::<Result<Vec<_>>>()?;
+        alphanumeric_sort::sort_slice_by_str_key(&mut pages, |(_, label)| label);
+        let patch = snapshot.patch(|edit| {
+            for (index, (id, _)) in pages.iter().enumerate() {
+                let at = if index == 0 {
+                    At::Start
+                } else {
+                    At::After(pages[index - 1].0)
+                };
+                edit.move_entity(*id, None, at)?;
+            }
+            Ok(())
+        })?;
+        self.commit(patch).await
+    }
+
     pub(crate) async fn add_point_text(
         &mut self,
         page: EntityId,
@@ -870,6 +891,7 @@ impl Project {
             }
         };
         self.redo.push(vec![commit.revision]);
+        self.prune_history();
         Ok(commit)
     }
 
@@ -883,6 +905,7 @@ impl Project {
             }
         };
         self.undo.push(vec![commit.revision]);
+        self.prune_history();
         Ok(commit)
     }
 
@@ -890,7 +913,14 @@ impl Project {
         if !revisions.is_empty() {
             self.undo.push(revisions);
             self.redo.clear();
+            self.prune_history();
         }
+    }
+
+    fn prune_history(&mut self) {
+        self.undo.drain(..self.undo.len().saturating_sub(10));
+        self.session
+            .retain_history(self.undo.iter().chain(&self.redo).flatten().copied());
     }
 
     pub(crate) fn record_commit(&mut self, commit: &Commit) {
@@ -1335,6 +1365,106 @@ mod tests {
     use koharu_scene::{Generation, ProducerId, WritingMode};
 
     use super::*;
+
+    #[tokio::test]
+    async fn undo_history_keeps_ten_steps_and_releases_discarded_revisions() {
+        let mut project = Project::new(Session::memory().await.unwrap(), "test".to_owned());
+        let mut revisions = Vec::new();
+        for index in 0..11 {
+            let patch = project
+                .snapshot()
+                .patch(|edit| {
+                    edit.add_page(PageDraft::new(format!("page {index}"), 1.0, 1.0), At::End)?;
+                    Ok(())
+                })
+                .unwrap();
+            let commit = project.commit(patch).await.unwrap();
+            revisions.push(commit.revision);
+            project.record_commit(&commit);
+        }
+        assert_eq!(project.undo.len(), 10);
+        assert!(project.session.undo(revisions[0]).await.is_err());
+
+        let mut replaced = Vec::new();
+        for _ in 0..10 {
+            replaced.push(project.undo.last().unwrap()[0]);
+            project.undo().await.unwrap();
+        }
+        assert_eq!(project.snapshot().pages().len(), 1);
+        assert!(!project.info().can_undo);
+        assert!(project.undo().await.is_err());
+        for revision in replaced {
+            assert!(project.session.undo(revision).await.is_err());
+        }
+        for _ in 0..10 {
+            project.redo().await.unwrap();
+        }
+        assert_eq!(project.snapshot().pages().len(), 11);
+        assert!(!project.info().can_redo);
+
+        project.undo().await.unwrap();
+        let discarded_redo = project.redo[0][0];
+        let patch = project
+            .snapshot()
+            .patch(|edit| {
+                edit.add_page(PageDraft::new("new branch", 1.0, 1.0), At::End)?;
+                Ok(())
+            })
+            .unwrap();
+        let commit = project.commit(patch).await.unwrap();
+        project.record_commit(&commit);
+        assert!(!project.info().can_redo);
+        assert!(project.session.undo(discarded_redo).await.is_err());
+        project.undo().await.unwrap();
+        assert_eq!(project.snapshot().pages().len(), 10);
+    }
+
+    #[tokio::test]
+    async fn filename_sort_orders_all_pages_naturally_and_undo_restores_import_order() {
+        let mut session = Session::memory().await.unwrap();
+        let mut setup = session.snapshot().edit();
+        let mut ids = Vec::new();
+        for label in [
+            "chapter 1-1.png",
+            "chapter 10-1.png",
+            "chapter 2-10.png",
+            "chapter 2-2.png",
+        ] {
+            ids.push(
+                setup
+                    .add_page(PageDraft::new(label, 100.0, 100.0), At::End)
+                    .unwrap(),
+            );
+        }
+        session.commit(setup.finish().unwrap()).await.unwrap();
+        let mut project = Project::new(session, "test".to_owned());
+        let active = project.active_page();
+
+        let commit = project.sort_pages_by_filename().await.unwrap();
+        project.record_commit(&commit);
+        assert_eq!(
+            project
+                .snapshot()
+                .pages()
+                .map(|page| page.id())
+                .collect::<Vec<_>>(),
+            vec![ids[0], ids[3], ids[2], ids[1]]
+        );
+        assert_eq!(project.active_page(), active);
+
+        let unchanged = project.sort_pages_by_filename().await.unwrap();
+        assert_eq!(unchanged.changes.from, unchanged.changes.to);
+
+        project.undo().await.unwrap();
+        assert_eq!(
+            project
+                .snapshot()
+                .pages()
+                .map(|page| page.id())
+                .collect::<Vec<_>>(),
+            ids
+        );
+    }
 
     #[test]
     fn only_user_authored_direction_is_projected_as_an_override() {
