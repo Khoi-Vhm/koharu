@@ -31,7 +31,7 @@ where
     let mut stream = response.bytes_stream().eventsource();
     let mut bytes = 0_usize;
     let mut output = Vec::new();
-    let mut text = String::new();
+    let mut streamed_text = false;
     let mut completed = false;
 
     loop {
@@ -62,7 +62,7 @@ where
         match kind {
             "response.output_text.delta" => {
                 if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                    text.push_str(delta);
+                    streamed_text = true;
                     publish(Delta::Text(delta.to_owned()));
                 }
             }
@@ -102,11 +102,11 @@ where
         bail!("Codex response stream ended before completion");
     }
 
-    if text.is_empty() {
-        text = output_text(&output);
-        if !text.is_empty() {
-            publish(Delta::Text(text.clone()));
-        }
+    // Streaming deltas include intermediate commentary; completed messages own
+    // the answer returned to callers such as the structured translation parser.
+    let text = output_text(&output);
+    if !streamed_text && !text.is_empty() {
+        publish(Delta::Text(text.clone()));
     }
     let mut seen = HashSet::new();
     let calls = output
@@ -134,8 +134,13 @@ where
 fn output_text(output: &[Value]) -> String {
     output
         .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("message"))
-        .filter_map(|item| item.get("content")?.as_array())
+        .rev()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("phase").and_then(Value::as_str) != Some("commentary")
+        })
+        .and_then(|item| item.get("content")?.as_array())
+        .into_iter()
         .flatten()
         .filter(|content| content.get("type").and_then(Value::as_str) == Some("output_text"))
         .filter_map(|content| content.get("text")?.as_str())
@@ -176,10 +181,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn returns_final_answer_without_intermediate_commentary() {
+        for body in [
+            concat!(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Need compact dialogue memory.\"}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"Need compact dialogue memory.\"}]}}\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"{\\\"translations\\\":[]}\"}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"message\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"translations\\\":[]}\"}]}}\n\n",
+                "data: {\"type\":\"response.completed\"}\n\n",
+            ),
+            concat!(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Need compact dialogue memory.\"}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[",
+                "{\"type\":\"message\",\"phase\":\"commentary\",\"content\":[{\"type\":\"output_text\",\"text\":\"Need compact dialogue memory.\"}]},",
+                "{\"type\":\"message\",\"phase\":\"final_answer\",\"content\":[{\"type\":\"output_text\",\"text\":\"{\\\"translations\\\":[]}\"}]}]}}\n\n",
+            ),
+        ] {
+            let turn = read(response(body).await, &Control::default(), |_| {})
+                .await
+                .unwrap();
+            assert_eq!(turn.text, r#"{"translations":[]}"#);
+            assert_eq!(turn.output.len(), 2);
+        }
+    }
+
+    #[tokio::test]
     async fn reads_completed_translation_and_rejects_partial_streams() {
         let completed = response(concat!(
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
-            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[]}}\n\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}]}}\n\n",
         ))
         .await;
         let turn = read(completed, &Control::default(), |_| {}).await.unwrap();

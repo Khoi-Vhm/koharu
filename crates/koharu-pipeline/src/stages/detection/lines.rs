@@ -30,7 +30,6 @@ pub(super) fn supplement(
                     && (existing.area == 0
                         || mask_containment(&existing.mask, &mask, bounds) > 0.0))
                     || (existing.label == "onomatopoeia"
-                        && existing.score >= 0.5
                         && (intersection_over_union(existing.bbox, bounds) >= 0.5
                             || (containment(existing.bbox, bounds) >= 0.8
                                 && mask_containment(&existing.mask, &mask, bounds) > 0.0)))
@@ -51,7 +50,7 @@ pub(super) fn supplement(
 }
 
 // PP-OCR supplies quadrilaterals rather than instance masks. Rasterize only
-// their local extent so both region matching and cleanup retain the line angle.
+// their local extent for region matching and OCR geometry, not cleanup masks.
 pub(super) fn polygon_mask(points: &[Point], width: u32, height: u32) -> Option<KoharuLayoutMask> {
     if points.len() < 3 || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
         return None;
@@ -116,8 +115,8 @@ mod tests {
     use koharu_ml::pp_ocr_v6::det::TextDetection;
 
     #[test]
-    fn weak_sound_effect_classification_does_not_hide_a_confident_text_line() {
-        for (sound_score, count) in [(0.25, 2), (0.9, 1)] {
+    fn sound_effects_are_not_reintroduced_as_text() {
+        for sound_score in [0.25, 0.9] {
             let sound = super::super::tests::detection(
                 "onomatopoeia",
                 sound_score,
@@ -138,7 +137,7 @@ mod tests {
                 },
                 &[],
             );
-            assert_eq!(output.detections.len(), count);
+            assert_eq!(output.detections.len(), 1);
         }
     }
 

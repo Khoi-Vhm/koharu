@@ -157,10 +157,15 @@ impl Model {
             .get(&input.scene, page, "source")
             .await?
             .ok_or_else(|| anyhow!("page {page} has no source image"))?;
-        let (mut output, lines) = self.detect(image.clone()).await?;
-        let preserved = preserve_text_regions(&input.scene, page, &mut output)?;
-        lines::supplement(&mut output, lines, &preserved);
-        build_patch(&input, &image, output, &generation(PRODUCER, MODEL_ID)?).await
+        let (output, lines) = self.detect(image.clone()).await?;
+        build_patch(
+            &input,
+            &image,
+            output,
+            lines,
+            &generation(PRODUCER, MODEL_ID)?,
+        )
+        .await
     }
 
     async fn detect(
@@ -224,35 +229,30 @@ struct ImageSize {
 async fn build_patch(
     input: &StageInput,
     image: &DynamicImage,
-    output: KoharuLayoutDetections,
+    mut output: KoharuLayoutDetections,
+    lines: koharu_ml::pp_ocr_v6::det::TextDetections,
     generation: &Generation,
 ) -> Result<koharu_scene::Patch> {
     let page = input.page;
     let mut edit = input.scene.edit_as(generation.clone());
     edit.observe_subtree(page)?;
-    write_page(input, &mut edit, page, image, output, generation)
-        .await
-        .context("failed to write detection output")?;
-    finish(edit)
-}
-
-async fn write_page(
-    input: &StageInput,
-    edit: &mut koharu_scene::Edit,
-    page: EntityId,
-    image: &DynamicImage,
-    output: KoharuLayoutDetections,
-    generation: &Generation,
-) -> Result<()> {
-    let KoharuLayoutDetections {
-        mut detections,
-        image_width,
-        image_height,
-    } = output;
     let size = ImageSize {
-        width: image_width,
-        height: image_height,
+        width: output.image_width,
+        height: output.image_height,
     };
+    // Only RF-DETR owns foreground segmentation. PP-OCR's padded line quads
+    // include artwork and must remain OCR geometry rather than erasure masks.
+    if let Some(region) = input.region {
+        output
+            .detections
+            .retain(|detection| intersects(detection.bbox, region));
+    }
+    write_masks(input, &mut edit, page, &output.detections, size)
+        .await
+        .context("failed to write detection masks")?;
+    let preserved = preserve_text_regions(&input.scene, page, &mut output)?;
+    lines::supplement(&mut output, lines, &preserved);
+    let mut detections = output.detections;
     if let Some(region) = input.region {
         detections.retain(|detection| intersects(detection.bbox, region));
     }
@@ -260,13 +260,18 @@ async fn write_page(
     sort_by_layout(&mut detections);
 
     let image = image.to_rgb8();
-    let regions = write_regions(&input.scene, edit, page, &image, &detections, generation)
-        .context("failed to write detected regions")?;
-    link_dialogue_regions(edit, &regions, generation)
+    let regions = write_regions(
+        &input.scene,
+        &mut edit,
+        page,
+        &image,
+        &detections,
+        generation,
+    )
+    .context("failed to write detected regions")?;
+    link_dialogue_regions(&mut edit, &regions, generation)
         .context("failed to associate detected text with dialogue regions")?;
-    write_masks(input, edit, page, &detections, size)
-        .await
-        .context("failed to write detection masks")
+    finish(edit)
 }
 
 fn write_regions<'a>(
@@ -1517,15 +1522,8 @@ async fn write_mask(
     } else {
         mask_for(detections, "text", size)
     };
-    if let Some(previous) = input.images.get(&input.scene, page, "text-mask").await? {
-        let previous = previous.to_luma8();
-        if previous.dimensions() != mask.dimensions() {
-            bail!("existing text-mask dimensions do not match page {page}");
-        }
-        for (pixel, previous) in mask.iter_mut().zip(previous.as_raw()) {
-            *pixel = (*pixel).max(*previous);
-        }
-    }
+    // Regenerate the selected area from current segmentation; merging an old
+    // generated mask would keep obsolete OCR quads and false positives forever.
     if let Some(bounds) = input.region {
         preserve_mask_outside_region(input, page, "text-mask", bounds, &mut mask).await?;
     }
@@ -1986,12 +1984,14 @@ fn area(bounds: [f32; 4]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use image::{Rgb, RgbImage};
+    use image::{DynamicImage, Rgb, RgbImage};
     use imageproc::{
         distance_transform::Norm,
         morphology::{close, dilate},
     };
-    use koharu_ml::koharu_layout_rfdetr_seg_2xl::{KoharuLayoutDetection, KoharuLayoutMask};
+    use koharu_ml::koharu_layout_rfdetr_seg_2xl::{
+        KoharuLayoutDetection, KoharuLayoutDetections, KoharuLayoutMask,
+    };
     use koharu_scene::{
         At, BubbleRegion, FitsTo, FlowsIn, Geometry, Inside, Origin, PageDraft, Session,
         TextLayout, TextLayoutKind, TextRegion, Typography, WritingMode,
@@ -2020,6 +2020,97 @@ mod tests {
         assert_eq!(settings.text_threshold, None);
         assert_eq!(settings.bubble_threshold, None);
         assert_eq!(settings.panel_threshold, Some(0.55));
+    }
+
+    #[tokio::test]
+    async fn cleanup_masks_use_segmentation_without_losing_supplemental_ocr_regions() {
+        let mut session = Session::memory().await.unwrap();
+        let mut stale_mask = image::GrayImage::new(100, 100);
+        stale_mask.put_pixel(75, 70, image::Luma([255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        DynamicImage::ImageLuma8(stale_mask)
+            .write_to(&mut png, image::ImageFormat::Png)
+            .unwrap();
+        let mut edit = session
+            .snapshot()
+            .edit_as(generation(super::PRODUCER, super::MODEL_ID).unwrap());
+        let page = edit
+            .add_page(PageDraft::new("page", 100.0, 100.0), At::End)
+            .unwrap();
+        edit.set_asset(
+            page,
+            &super::AssetRole::new("text-mask").unwrap(),
+            super::AssetInput::new(
+                std::sync::Arc::<[u8]>::from(png.into_inner()),
+                "image/png",
+                super::AssetMetadata {
+                    width: Some(100),
+                    height: Some(100),
+                    attributes: Default::default(),
+                },
+            ),
+        )
+        .unwrap();
+        session.commit(super::finish(edit).unwrap()).await.unwrap();
+        for _ in 0..2 {
+            let input = StageInput::new(
+                session.snapshot(),
+                page,
+                None,
+                None,
+                std::sync::Arc::new(crate::ImageCache::default()),
+                None,
+            );
+            let mut primary = detection("text", 0.9, [8.0, 8.0, 12.0, 12.0]);
+            primary.mask = KoharuLayoutMask {
+                x: 8,
+                y: 8,
+                width: 4,
+                height: 4,
+                pixels: vec![255; 16],
+            };
+            primary.area = 16;
+            let output = KoharuLayoutDetections {
+                image_width: 100,
+                image_height: 100,
+                detections: vec![primary],
+            };
+            let lines = koharu_ml::pp_ocr_v6::det::TextDetections {
+                detections: vec![koharu_ml::pp_ocr_v6::det::TextDetection {
+                    polygon: [[60.0, 60.0], [90.0, 60.0], [90.0, 80.0], [60.0, 80.0]],
+                    score: 0.9,
+                }],
+            };
+            let patch = super::build_patch(
+                &input,
+                &DynamicImage::new_rgb8(100, 100),
+                output,
+                lines,
+                &generation(super::PRODUCER, super::MODEL_ID).unwrap(),
+            )
+            .await
+            .unwrap();
+            let scene = session.commit(patch).await.unwrap().snapshot;
+            assert_eq!(
+                scene
+                    .entities_with::<koharu_scene::TextContent>()
+                    .unwrap()
+                    .len(),
+                2
+            );
+            let mask = crate::ImageCache::default()
+                .get(&scene, page, "text-mask")
+                .await
+                .unwrap()
+                .unwrap()
+                .to_luma8();
+            assert_eq!(mask.get_pixel(10, 10)[0], 255);
+            assert_eq!(
+                mask.get_pixel(75, 70)[0],
+                0,
+                "OCR crop must not erase artwork"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2103,7 +2194,7 @@ mod tests {
                 std::sync::Arc::new(crate::ImageCache::default()),
                 None,
             );
-            let mut output = koharu_ml::koharu_layout_rfdetr_seg_2xl::KoharuLayoutDetections {
+            let output = koharu_ml::koharu_layout_rfdetr_seg_2xl::KoharuLayoutDetections {
                 image_width: 100,
                 image_height: 100,
                 detections: vec![
@@ -2112,20 +2203,15 @@ mod tests {
                     detection("text", 0.9, [10.0, 10.0, 40.0, 80.0]),
                 ],
             };
-            let preserved = super::preserve_text_regions(&input.scene, page, &mut output).unwrap();
-            super::lines::supplement(
-                &mut output,
-                koharu_ml::pp_ocr_v6::det::TextDetections {
-                    detections: [5.0, 40.0, 65.0]
-                        .map(|y| koharu_ml::pp_ocr_v6::det::TextDetection {
-                            polygon: [[10.0, y], [40.0, y], [40.0, y + 15.0], [10.0, y + 15.0]],
-                            score: 0.9,
-                        })
-                        .into(),
-                },
-                &preserved,
-            );
-            let patch = super::build_patch(&input, &image, output, &generation)
+            let lines = koharu_ml::pp_ocr_v6::det::TextDetections {
+                detections: [5.0, 40.0, 65.0]
+                    .map(|y| koharu_ml::pp_ocr_v6::det::TextDetection {
+                        polygon: [[10.0, y], [40.0, y], [40.0, y + 15.0], [10.0, y + 15.0]],
+                        score: 0.9,
+                    })
+                    .into(),
+            };
+            let patch = super::build_patch(&input, &image, output, lines, &generation)
                 .await
                 .unwrap();
             let scene = session.commit(patch).await.unwrap().snapshot;
@@ -2576,18 +2662,15 @@ mod tests {
             image_height: 100,
             detections: Vec::new(),
         };
-        super::lines::supplement(
-            &mut fresh,
-            koharu_ml::pp_ocr_v6::det::TextDetections {
-                detections: [points, shifted]
-                    .map(|polygon| koharu_ml::pp_ocr_v6::det::TextDetection {
-                        polygon: polygon.map(|p| [p.x as f32, p.y as f32]),
-                        score: 0.9,
-                    })
-                    .into(),
-            },
-            &[],
-        );
+        let lines = koharu_ml::pp_ocr_v6::det::TextDetections {
+            detections: [points, shifted]
+                .map(|polygon| koharu_ml::pp_ocr_v6::det::TextDetection {
+                    polygon: polygon.map(|p| [p.x as f32, p.y as f32]),
+                    score: 0.9,
+                })
+                .into(),
+        };
+        super::lines::supplement(&mut fresh, lines.clone(), &[]);
         assert_eq!(fresh.detections.len(), 2);
         super::non_maximum_suppression(&mut fresh.detections, 0.5);
         assert_eq!(fresh.detections.len(), 2);
@@ -2602,7 +2685,11 @@ mod tests {
         let patch = super::build_patch(
             &input,
             &image::DynamicImage::new_rgb8(100, 100),
-            fresh,
+            KoharuLayoutDetections {
+                detections: Vec::new(),
+                ..fresh
+            },
+            lines,
             &generation(super::PRODUCER, super::MODEL_ID).unwrap(),
         )
         .await
